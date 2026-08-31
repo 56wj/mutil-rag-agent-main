@@ -1,0 +1,60 @@
+{
+  "mode": "ragas",
+  "rows": 1,
+  "retrieve_k": 20,
+  "bm25_weight": 0.4,
+  "rrf_k": 60,
+  "elapsed_sec": 122.7032940001227,
+  "averages": {
+    "faithfulness": 1.0,
+    "answer_relevancy": 0.7661480642646235,
+    "context_precision": 0.99999999995,
+    "context_recall": 1.0
+  },
+  "openevals_enabled": false,
+  "openevals_averages": {},
+  "details": [
+    {
+      "id": "ragas-redis-01",
+      "scenario": "Redis",
+      "question": "Redis 连接池耗尽导致 5xx 升高,应该先看哪些指标和命令?",
+      "ground_truth": "先看 redis-cli INFO clients 的 connected_clients、blocked_clients,再比较 CONFIG GET maxclients; 用 CLIENT LIST 查 idle 很高或 age 很长的连接; 应用侧检查连接池 active/idle/waiters、borrow latency 和连接是否 finally close; 紧急可临时调大 maxclients 并修复连接泄漏。",
+      "answer": "首先，应查看 Redis 服务端连接数：\n```bash\nredis-cli INFO clients\nredis-cli CONFIG GET maxclients\n```\n重点比较 `connected_clients` 与 `maxclients`，同时关注 `blocked_clients`。其次，查找可能的连接不释放客户端：\n```bash\nredis-cli CLIENT LIST\n```\n重点关注 `addr`、`name`、`age`、`idle`、`cmd`，大量 `idle` 很高的连接通常说明应用侧未释放连接或连接池配置过大。",
+      "contexts": [
+        "## 来源 1 | oncall_eval_runbooks.md | 章节: OnCall Eval Runbooks / Redis 故障 / Redis 连接池耗尽导致 5xx 升高\n## Redis 故障  \n### Redis 连接池耗尽导致 5xx 升高  \n#### 现象\n- 应用侧 5xx、Redis timeout、`Could not get a resource from the pool`、`ERR max number of clients reached` 增多。\n- Redis 服务端 `connected_clients` 接近 `maxclients`，或应用连接池 active 长时间接近 maxActive。  \n#### 排查步骤\n1. 看 Redis 服务端连接数。\n```bash\nredis-cli INFO clients\nredis-cli CONFIG GET maxclients\n```\n重点比较 `connected_clients` 与 `maxclients`，同时关注 `blocked_clients`。\n2. 找连接不释放的客户端。\n```bash\nredis-cli CLIENT LIST\n```\n关注 `addr`、`name`、`age`、`idle`、`cmd`。大量 `idle` 很高的连接通常说明应用侧未释放连接或连接池配置过大。\n3. 排查应用侧连接池。\n- Java 常见检查 Jedis/Lettuce/Hikari 配置，确认 borrow 后是否 finally close。\n- 看连接池指标: active、idle、waiters、borrow latency。\n- 检查是否有长事务、pipeline 风暴、阻塞命令导致连接长时间占用。\n4. 关联 Redis 慢日志和 CPU。\n```bash\nredis-cli SLOWLOG GET 20\nredis-cli INFO commandstats\n```  \n#### 处置\n- 紧急止损: 在宿主机资源允许时临时调大 `maxclients`，并同步调高文件句柄限制。\n- 应用侧: 回滚异常版本，修复连接泄漏，确保连接归还；限制单实例连接池上限。\n- 长期治理: 连接池 active/waiters 告警，Redis `connected_clients/maxclients` 超过 80% 预警。",
+        "## 来源 2 | oncall_eval_runbooks.md | 章节: OnCall Eval Runbooks / Redis 故障 / Redis CLIENT LIST idle 高连接泄漏\n### Redis CLIENT LIST idle 高连接泄漏  \n#### 现象\n- `redis-cli CLIENT LIST` 里同一批应用地址连接数量异常多，`age` 很大且 `idle` 持续升高。\n- 应用报 Redis timeout、连接池 waiters 增加，但 Redis QPS 未必同步升高。  \n#### 排查步骤\n1. 按 `addr`、`name`、`cmd` 聚合同一应用实例的连接，确认是不是连接池未归还。\n2. 对比应用连接池 active、idle、maxActive、borrow latency，看是否存在 borrow 后没有 close 的代码路径。\n3. 检查 pipeline、事务、阻塞命令或慢命令是否让连接长期占用。\n4. Java 客户端重点看 Jedis 是否 finally close，Lettuce 是否复用连接过度或异步 future 未消费。  \n#### 处置\n- 先限流或重启异常应用实例释放泄漏连接。\n- 将连接池上限控制在服务端 `maxclients` 可承受范围内，避免所有实例叠加后打满 Redis。\n- 修复连接生命周期，增加连接池 waiters、borrow timeout、idle age 的应用侧告警。",
+        "## 来源 3 | redis_oncall_sop.md | 章节: Redis On-Call SOP / 第二章 性能类问题 / 2.1 CPU 100%\n## 第二章 性能类问题  \n### 2.1 CPU 100%  \n#### 排查\n1. 用 `redis-cli --latency` 看延迟\n2. `SLOWLOG GET 20` 拉慢日志\n3. `CLIENT LIST` 看是否有异常连接 / pipeline 风暴  \n#### 常见原因\n- KEYS 等阻塞命令被业务调用\n- 大 key 的 SMEMBERS / HGETALL 等全量操作\n- 持久化 (BGSAVE) 与高 QPS 叠加\n- Lua 脚本执行时间过长  \n#### 处置\n- 立即定位发起方 (CLIENT LIST 看 IP 端口)\n- 联系业务方紧急停止\n- 长期: 接入慢日志告警, 设 CPU 阈值告警"
+      ],
+      "hits": [
+        {
+          "source": "oncall_eval_runbooks.md",
+          "chapter": "OnCall Eval Runbooks / Redis 故障 / Redis 连接池耗尽导致 5xx 升高",
+          "preview": "[OnCall Eval Runbooks / Redis 故障 / Redis 连接池耗尽导致 5xx 升高] ## Redis 故障   ### Redis 连接池耗尽导致 5xx 升高   #### 现象 - 应用侧 5xx、Redis timeout、`Could not get a resource from the pool`、`ERR max number of clients reached` 增多。 - Redis 服务端 `connected_client...",
+          "score": null,
+          "parent_id": "819e952b87c6"
+        },
+        {
+          "source": "oncall_eval_runbooks.md",
+          "chapter": "OnCall Eval Runbooks / Redis 故障 / Redis CLIENT LIST idle 高连接泄漏",
+          "preview": "[OnCall Eval Runbooks / Redis 故障 / Redis CLIENT LIST idle 高连接泄漏] ### Redis CLIENT LIST idle 高连接泄漏   #### 现象 - `redis-cli CLIENT LIST` 里同一批应用地址连接数量异常多，`age` 很大且 `idle` 持续升高。 - 应用报 Redis timeout、连接池 waiters 增加，但 Redis QPS 未必同步升高。   #### 排查步骤 ...",
+          "score": null,
+          "parent_id": "89ef88390b40"
+        },
+        {
+          "source": "redis_oncall_sop.md",
+          "chapter": "Redis On-Call SOP / 第二章 性能类问题 / 2.1 CPU 100%",
+          "preview": "[Redis On-Call SOP / 第二章 性能类问题 / 2.1 CPU 100%] ## 第二章 性能类问题   ### 2.1 CPU 100%   #### 排查 1. 用 `redis-cli --latency` 看延迟 2. `SLOWLOG GET 20` 拉慢日志 3. `CLIENT LIST` 看是否有异常连接 / pipeline 风暴   #### 常见原因 - KEYS 等阻塞命令被业务调用 - 大 key 的 SMEMBERS / HGET...",
+          "score": null,
+          "parent_id": "27cd97c848b3"
+        }
+      ],
+      "scores": {
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.7661480642646235,
+        "context_precision": 0.99999999995,
+        "context_recall": 1.0
+      },
+      "openevals": null
+    }
+  ]
+}

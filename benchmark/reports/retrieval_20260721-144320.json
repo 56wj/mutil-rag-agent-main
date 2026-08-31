@@ -1,0 +1,140 @@
+{
+  "mode": "retrieval",
+  "k": 3,
+  "rows": 3,
+  "hybrid": true,
+  "rerank": false,
+  "retrieve_k": 20,
+  "bm25_weight": 0.4,
+  "rrf_k": 60,
+  "parent_rerank": true,
+  "hit_at_k": 0.6666666666666666,
+  "mrr_at_k": 0.6666666666666666,
+  "recall_at_k": 0.6666666666666666,
+  "elapsed_sec": 3.684700333978981,
+  "details": [
+    {
+      "id": "rk-redis-01",
+      "scenario": "Redis",
+      "query": "Redis connected_clients 接近 maxclients 怎么排查连接池耗尽?",
+      "score": {
+        "hit": 1.0,
+        "mrr": 1.0,
+        "recall": 1.0,
+        "first_rank": 1
+      },
+      "hits": [
+        {
+          "source": "oncall_eval_runbooks.md",
+          "chapter": "OnCall Eval Runbooks / Redis 故障 / Redis 连接池耗尽导致 5xx 升高",
+          "preview": "[OnCall Eval Runbooks / Redis 故障 / Redis 连接池耗尽导致 5xx 升高] ## Redis 故障   ### Redis 连接池耗尽导致 5xx 升高   #### 现象 - 应用侧 5xx、Redis timeout、`Could not get a resource from the pool`、`ERR max number of clients reached` 增多。 - Redis 服务端 `connected_client...",
+          "score": null,
+          "parent_id": "819e952b87c6"
+        },
+        {
+          "source": "oncall_eval_runbooks.md",
+          "chapter": "OnCall Eval Runbooks / Redis 故障 / Redis CLIENT LIST idle 高连接泄漏",
+          "preview": "[OnCall Eval Runbooks / Redis 故障 / Redis CLIENT LIST idle 高连接泄漏] ### Redis CLIENT LIST idle 高连接泄漏   #### 现象 - `redis-cli CLIENT LIST` 里同一批应用地址连接数量异常多，`age` 很大且 `idle` 持续升高。 - 应用报 Redis timeout、连接池 waiters 增加，但 Redis QPS 未必同步升高。   #### 排查步骤 ...",
+          "score": null,
+          "parent_id": "89ef88390b40"
+        },
+        {
+          "source": "mysql_oncall_sop.md",
+          "chapter": "MySQL On-Call SOP / 第二章 连接类问题 / 2.1 连接数打满 (Too many connections)",
+          "preview": "[MySQL On-Call SOP / 第二章 连接类问题 / 2.1 连接数打满 (Too many connections)] ## 第二章 连接类问题   ### 2.1 连接数打满 (Too many connections)   #### 排查 ```sql SHOW VARIABLES LIKE 'max_connections'; SHOW STATUS LIKE 'Threads_connected'; SELECT user, count(*) FROM ...",
+          "score": null,
+          "parent_id": "39931dd47c79"
+        }
+      ],
+      "relevant": [
+        {
+          "source": "oncall_eval_runbooks.md",
+          "chapter_contains": "Redis 连接池耗尽"
+        }
+      ],
+      "relevant_groups": null
+    },
+    {
+      "id": "rk-redis-02",
+      "scenario": "Redis",
+      "query": "CLIENT LIST 看到大量 idle 很高的连接,应该怀疑什么?",
+      "score": {
+        "hit": 0.0,
+        "mrr": 0.0,
+        "recall": 0.0,
+        "first_rank": null
+      },
+      "hits": [
+        {
+          "source": "oncall_eval_runbooks.md",
+          "chapter": "OnCall Eval Runbooks / Redis 故障 / Redis CLIENT LIST idle 高连接泄漏",
+          "preview": "[OnCall Eval Runbooks / Redis 故障 / Redis CLIENT LIST idle 高连接泄漏] ### Redis CLIENT LIST idle 高连接泄漏   #### 现象 - `redis-cli CLIENT LIST` 里同一批应用地址连接数量异常多，`age` 很大且 `idle` 持续升高。 - 应用报 Redis timeout、连接池 waiters 增加，但 Redis QPS 未必同步升高。   #### 排查步骤 ...",
+          "score": null,
+          "parent_id": "89ef88390b40"
+        },
+        {
+          "source": "redis_oncall_sop.md",
+          "chapter": "Redis On-Call SOP / 第二章 性能类问题 / 2.1 CPU 100%",
+          "preview": "[Redis On-Call SOP / 第二章 性能类问题 / 2.1 CPU 100%] ## 第二章 性能类问题   ### 2.1 CPU 100%   #### 排查 1. 用 `redis-cli --latency` 看延迟 2. `SLOWLOG GET 20` 拉慢日志 3. `CLIENT LIST` 看是否有异常连接 / pipeline 风暴   #### 常见原因 - KEYS 等阻塞命令被业务调用 - 大 key 的 SMEMBERS / HGET...",
+          "score": null,
+          "parent_id": "27cd97c848b3"
+        },
+        {
+          "source": "mysql_oncall_sop.md",
+          "chapter": "MySQL On-Call SOP / 第二章 连接类问题 / 2.1 连接数打满 (Too many connections)",
+          "preview": "[MySQL On-Call SOP / 第二章 连接类问题 / 2.1 连接数打满 (Too many connections)] ## 第二章 连接类问题   ### 2.1 连接数打满 (Too many connections)   #### 排查 ```sql SHOW VARIABLES LIKE 'max_connections'; SHOW STATUS LIKE 'Threads_connected'; SELECT user, count(*) FROM ...",
+          "score": null,
+          "parent_id": "39931dd47c79"
+        }
+      ],
+      "relevant": [
+        {
+          "source": "oncall_eval_runbooks.md",
+          "chapter_contains": "Redis 连接池耗尽"
+        }
+      ],
+      "relevant_groups": null
+    },
+    {
+      "id": "rk-redis-03",
+      "scenario": "Redis",
+      "query": "Redis OOM command not allowed used_memory 超过 maxmemory 怎么止损?",
+      "score": {
+        "hit": 1.0,
+        "mrr": 1.0,
+        "recall": 1.0,
+        "first_rank": 1
+      },
+      "hits": [
+        {
+          "source": "redis_oncall_sop.md",
+          "chapter": "Redis On-Call SOP / 第一章 内存类问题 / 1.1 内存使用率过高 (used_memory > 90% maxmemory)",
+          "preview": "[Redis On-Call SOP / 第一章 内存类问题 / 1.1 内存使用率过高 (used_memory > 90% maxmemory)] ## 第一章 内存类问题   ### 1.1 内存使用率过高 (used_memory > 90% maxmemory)   #### 现象 - 客户端报错 `OOM command not allowed when used memory > 'maxmemory'` - 写操作失败, 读操作可能正常 - 连接被强制断开  ...",
+          "score": null,
+          "parent_id": "aceb187305c5"
+        },
+        {
+          "source": "awesome-prometheus-alerts/0210__redis__redis-out-of-configured-maxmemory.md",
+          "chapter": "Redis out of configured maxmemory",
+          "preview": "[Redis out of configured maxmemory] # Redis out of configured maxmemory   > Group: **Databases** > Service: **Redis** > Exporter: `oliver006-redis-exporter` > Severity: **warning** > Duration (for): `2m`",
+          "score": null,
+          "parent_id": "4eda2d34c5d4"
+        },
+        {
+          "source": "redis_oncall_sop.md",
+          "chapter": "Redis On-Call SOP / 第一章 内存类问题 / 1.2 内存碎片率过高 (mem_fragmentation_ratio > 1.5)",
+          "preview": "[Redis On-Call SOP / 第一章 内存类问题 / 1.2 内存碎片率过高 (mem_fragmentation_ratio > 1.5)] ### 1.2 内存碎片率过高 (mem_fragmentation_ratio > 1.5)   #### 现象 - INFO memory 看到 mem_fragmentation_ratio > 1.5 - used_memory_rss 远大于 used_memory   #### 处置 - Redis 4.0+ ...",
+          "score": null,
+          "parent_id": "21f1751296ce"
+        }
+      ],
+      "relevant": [
+        {
+          "source": "redis_oncall_sop.md",
+          "chapter_contains": "内存使用率过高"
+        }
+      ],
+      "relevant_groups": null
+    }
+  ]
+}
