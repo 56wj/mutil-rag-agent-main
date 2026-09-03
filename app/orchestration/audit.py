@@ -2,7 +2,7 @@
 
 跑一次诊断 = 创建一条 AgentRun + 收集 N 条 Evidence(alert_payload/tool_call/
 diagnosis_step/diagnosis_report) + 记 ToolCall 行 + 最终 finish_run 落定状态/usage。
-本模块不知道 Redis 队列、SSE、HTTP, 只对 orchestration.diagnosis_runner 的事件流
+本模块不知道 Kafka 队列、SSE、HTTP, 只对 orchestration.diagnosis_runner 的事件流
 做"写审计"的副作用。供 Worker 调; 手动 SSE 路径不进这里(无 task_id 事实行)。
 """
 

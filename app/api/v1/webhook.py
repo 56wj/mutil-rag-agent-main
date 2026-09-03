@@ -1,6 +1,6 @@
 """Alertmanager webhook 入账接口。
 
-webhook 只做"入账+入队",不跑诊断: 校验 → 归一 → 去重 → 落 Postgres → 投 Redis 队列。
+webhook 只做"入账+入队",不跑诊断: 校验 → 归一 → 去重 → 落 Postgres → 投 Kafka。
 真正的诊断在独立进程 `python -m app.diagnosis_worker` 里跑。
 """
 
@@ -16,7 +16,7 @@ from app.config import settings
 from app.core import rate_limiter
 from app.incidents.models import DiagnosisMode
 from app.incidents.repository import incident_repository
-from app.queue.redis_streams import incident_queue, level_for_severity
+from app.queue.kafka import incident_queue, level_for_severity
 
 router = APIRouter(prefix="/webhook", tags=["webhook"])
 
@@ -102,7 +102,7 @@ def _priority_for(alert: AlertmanagerAlert) -> int:
     summary="Alertmanager alert ingestion",
     description=(
         "Accept Alertmanager v4 payloads, persist alerts and incident groups, "
-        "then enqueue diagnosis tasks to Redis Streams. The request returns quickly; "
+        "then enqueue diagnosis tasks to Kafka. The request returns quickly; "
         "diagnosis is performed by the worker process."
     ),
 )

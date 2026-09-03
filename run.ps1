@@ -4,15 +4,17 @@
 # Startup order:
 #   1. Start / check Milvus container
 #   2. Start / check Redis container (RAG Chat session memory)
-#   3. Start MCP servers in background
-#   4. Wait for MCP ports
-#   5. Start FastAPI by uvicorn in foreground
+#   3. Start / check Kafka broker (Incident task queue)
+#   4. Start MCP servers in background
+#   5. Wait for MCP ports
+#   6. Start FastAPI by uvicorn in foreground
 #
 # Usage:
 #   .\run.ps1
 #   .\run.ps1 -NoMcp
 #   .\run.ps1 -NoMilvus
 #   .\run.ps1 -NoRedis
+#   .\run.ps1 -NoKafka
 #   .\run.ps1 -Stop
 # ============================================================
 
@@ -20,6 +22,7 @@ param(
     [switch]$NoMcp,
     [switch]$NoMilvus,
     [switch]$NoRedis,
+    [switch]$NoKafka,
     [switch]$NoWebSearch,
     [switch]$Stop
 )
@@ -406,6 +409,21 @@ if (-not $NoRedis) {
     }
 } else {
     Write-Host "[skip] Redis auto-start disabled by -NoRedis" -ForegroundColor DarkYellow
+}
+
+if (-not $NoKafka) {
+    Write-Host "[check] Kafka (localhost:9092)..." -ForegroundColor Cyan
+    if (-not (Test-TcpPort -HostName "127.0.0.1" -Port 9092)) {
+        try {
+            Write-Host "[start] docker compose up -d kafka..." -ForegroundColor Cyan
+            docker compose up -d kafka
+        } catch {
+            Write-Host "[warn] Docker not available or docker compose failed. Kafka may be unavailable." -ForegroundColor Yellow
+        }
+    }
+    Wait-TcpPort -Name "Kafka" -HostName "127.0.0.1" -Port 9092 -TimeoutSec 90 | Out-Null
+} else {
+    Write-Host "[skip] Kafka auto-start disabled by -NoKafka" -ForegroundColor DarkYellow
 }
 
 if (-not $NoWebSearch) {

@@ -16,9 +16,9 @@
 - **Skill-first 路由**：先匹配排障 Playbook，再限制可用工具和上下文，降低误调用与无效检索。
 - **混合 RAG**：Parent-Child chunking、Vector + BM25 双路召回、RRF 融合与本地 reranker。
 - **统一工具接入**：系统、网络、Docker、Web Search、Windows 日志等能力通过 MCP 服务暴露。
-- **后台任务系统**：Redis Streams 提供优先级队列，独立 Worker 执行长耗时诊断。
+- **后台任务系统**：Kafka 多 topic 提供优先级队列，独立 Worker 执行长耗时诊断。
 - **事实与审计**：Postgres 保存告警、事件组、任务、AgentRun、ToolCall、Evidence 和报告。
-- **并发保护**：支持接口限流、分布式执行槽、Worker 心跳、pending 回收、重试和死信队列。
+- **并发保护**：支持接口限流、分布式执行槽、Worker 心跳、Kafka rebalance、重试和死信队列。
 - **经验沉淀**：诊断结果可整理为 Markdown Wiki，并在后续诊断中重新召回。
 - **评测与压测**：包含检索评测、RAGAS / OpenEvals 数据集以及队列和接口压测脚本。
 
@@ -30,7 +30,7 @@ flowchart TD
     API --> SYNC[SSE Diagnosis]
     API --> TASK[Async Task]
     API --> DB[(Postgres)]
-    TASK --> QUEUE[(Redis Streams)]
+    TASK --> QUEUE[(Kafka)]
     QUEUE --> W1[Worker 1]
     QUEUE --> W2[Worker 2]
     QUEUE --> W3[Worker 3]
@@ -94,7 +94,7 @@ IncidentManager
 | Agent 编排 | LangGraph、LangChain |
 | 模型接入 | OpenAI-compatible API、可选本地模型 |
 | 检索 | Milvus、BM25、RRF、BGE reranker |
-| 任务队列 | Redis Streams |
+| 任务队列 | Apache Kafka |
 | 事实库 | PostgreSQL |
 | 工具协议 | MCP |
 | 部署 | Docker Compose、Shell、PowerShell |
@@ -156,7 +156,7 @@ docker compose --profile app up -d --build
 docker compose ps
 ```
 
-该方式会启动 API、3 个 Worker、MCP 服务、Milvus、Redis、Postgres 和本地 Web Search 服务。
+该方式会启动 API、3 个 Worker、MCP 服务、Milvus、Kafka、Redis、Postgres 和本地 Web Search 服务。Redis 继续用于会话记忆和分布式限流槽，不再承载诊断消息队列。
 
 查看日志或停止服务：
 
@@ -164,6 +164,22 @@ docker compose ps
 docker compose logs -f api worker-1
 docker compose --profile app down
 ```
+
+Kafka 默认创建 `aiops.incident-tasks.{critical,high,normal,low}` 四个优先级 topic
+和 `aiops.incident-tasks.dlq`。生产者以 `task_id` 为 key，Worker 成功落库后才提交
+offset，因此交付语义为 at-least-once，Postgres 任务状态承担幂等保护。
+本地 Compose 默认 3 partitions、1 replica；生产环境应按 Worker 并发设置 partitions，
+并把 replication factor 调到与 Kafka 集群容错目标一致。
+
+从旧 Redis Streams 部署切换且需要保留 backlog 时，先停旧 Worker，再执行：
+
+```bash
+python scripts/migrate_redis_streams_to_kafka.py --dry-run
+python scripts/migrate_redis_streams_to_kafka.py
+```
+
+迁移脚本只复制旧 consumer group 的 pending/unread 记录，不删除或 ACK Redis
+源消息；确认 Kafka 消费稳定后再按运维窗口清理旧 Stream。
 
 #### 方式 B：本地 Python 进程 + Docker 基础设施
 
@@ -311,7 +327,7 @@ Markdown / SOP / Alert Corpus
 - Embedding：`EMBEDDING_PROVIDER`、`OLLAMA_*`、`DASHSCOPE_EMBEDDING_*`
 - 存储：`MILVUS_*`、`REDIS_URL`、`DATABASE_URL`
 - RAG：`RAG_*`
-- 队列与 Worker：`DIAGNOSIS_TASK_*`、`*_DIAGNOSIS_CONCURRENCY`
+- 队列与 Worker：`KAFKA_*`、`DIAGNOSIS_TASK_*`、`*_DIAGNOSIS_CONCURRENCY`
 - MCP：`MCP_*_URL`
 - 权限控制：`PERMISSION_MODE`、`GUARDRAILS_BLOCK_HIGH_RISK_TOOLS`
 - 日志：`LOG_LEVEL`、`LOG_DIR`、`LOG_RETENTION_DAYS`

@@ -182,7 +182,7 @@ def fire_alert(base_url: str, scenario_key: str) -> None:
                 print(f"  \u00b7 incident_group_id = {item.get('incident_group_id', '')}")
                 print(f"    task_id           = {item.get('task_id', '')}")
                 print(f"    enqueued          = {item.get('enqueued', False)}")
-            print("\n\ud83d\udcdd \u8bca\u65ad\u4efb\u52a1\u5df2\u5165 Redis Stream, \u9700\u8981\u542f\u52a8 Worker \u6d88\u8d39:")
+            print("\n\ud83d\udcdd \u8bca\u65ad\u4efb\u52a1\u5df2\u5165 Kafka, \u9700\u8981\u542f\u52a8 Worker \u6d88\u8d39:")
             print("   python -m app.workers.diagnosis_worker")
             print("\n\ud83d\udd0d \u67e5\u770b\u8bca\u65ad\u7ed3\u679c:")
             print("   python scripts/mock_alert.py --list-history")

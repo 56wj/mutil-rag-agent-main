@@ -15,9 +15,8 @@
   - finally 自动 ZREM 释放;
   - contextvar 暴露当前槽句柄, 供"等待人工审批时先把槽让出去"用 (pause/resume).
 
-容错策略: fail-open. Redis 不可用时 acquire 直接放行并打 warning ——
-  这个项目的队列本来就强依赖 Redis, 真挂了整条链路都不工作, 限流层没必要再叠一层
-  硬失败把诊断也拖死; 宁可短暂失去全局上限, 也不让限流器成为新的单点故障.
+容错策略: fail-open. Redis 不可用时 acquire 直接放行并打 warning。
+Kafka 队列与 Redis 限流槽彼此独立；限流存储短暂故障时不阻断诊断消费。
 """
 
 from __future__ import annotations
@@ -84,12 +83,12 @@ def _new_token() -> str:
 
 
 async def _redis() -> Any | None:
-    """复用 incident_queue 的 Redis 连接, 避免再开一个连接池。Redis 不可用返回 None。"""
+    """复用进程级 Redis 连接。Redis 不可用返回 None。"""
     if not settings.distributed_limiter_enabled:
         return None
     try:
-        from app.queue.redis_streams import incident_queue
-        return await incident_queue.client()
+        from app.core.redis_client import get_redis_client
+        return await get_redis_client()
     except Exception as exc:  # pragma: no cover - 防御式
         logger.warning(f"[limiter] Redis 不可达, 限流降级放行: {type(exc).__name__}: {exc}")
         return None

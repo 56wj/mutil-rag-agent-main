@@ -3,7 +3,7 @@
 启动方式:
     python -m app.diagnosis_worker
 
-Worker 从 Redis Stream 消费诊断任务、跑当前的 AIOps 图、把任务生命周期状态记到 Postgres。
+Worker 从 Kafka 消费诊断任务、跑当前的 AIOps 图、把任务生命周期状态记到 Postgres。
 未来 Deep Diagnosis 升级只需替换下层图实现, 入队/审计链路无需改动。
 """
 
@@ -21,48 +21,42 @@ from app.orchestration.audit import run_legacy_langgraph_with_audit
 from app.config import settings
 from app.core.distributed_limiter import distributed_slot
 from app.core.mcp_client import mcp_client_manager
+from app.core.redis_client import close_redis_client
 from app.db.postgres import close_postgres, connect_postgres, init_incident_schema
 from app.incidents.repository import incident_repository
-from app.queue.redis_streams import incident_queue
+from app.queue.kafka import incident_queue
 
 
 class DiagnosisWorker:
-    """诊断任务的 Redis Streams 消费者。
+    """诊断任务的 Kafka 消费者。
 
     这个 Worker 的目标不是"跑得越快越好", 而是"失败后可恢复"。
     新手理解重点:
-    - Redis Stream 负责把任务交给某个 Worker;
+    - Kafka consumer group 负责把任务分配给某个 Worker;
     - Postgres 负责记录任务事实状态;
-    - Worker 成功后 ACK, 失败后根据 attempts 决定 retry 或 DLQ;
-    - heartbeat 只是运行态信号, 不当事实库。
+    - Worker 成功后提交 offset, 失败后根据 attempts 决定 retry 或 DLQ;
+    - Kafka group heartbeat/rebalance 负责故障转移，不把运行态当事实库。
     """
 
     def __init__(self, consumer_name: str | None = None) -> None:
         suffix = os.environ.get("DIAGNOSIS_WORKER_ID") or settings.diagnosis_worker_consumer_name
         self.consumer_name = consumer_name or suffix
         self._stopping = asyncio.Event()
-        self._heartbeat_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         await connect_postgres()
         await init_incident_schema()
         await incident_queue.connect()
         await mcp_client_manager.connect(fail_silently=True)
-        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         logger.info(f"[diagnosis-worker] started consumer={self.consumer_name}")
 
         while not self._stopping.is_set():
-            # 先尝试回收 stale pending 任务, 再读新任务。
-            # 为什么放在这里:
-            # - 普通 XREADGROUP 只读新消息, 不会自动处理崩溃 Worker 留下的 pending;
-            # - 每轮先 reclaim, 可以让旧任务恢复执行。
-            tasks = await self._claim_stale_tasks_once()
-            if not tasks:
-                tasks = await incident_queue.read_tasks(
-                    consumer_name=self.consumer_name,
-                    count=1,
-                    block_ms=settings.diagnosis_worker_block_ms,
-                )
+            # Kafka 在 Worker 退出或失联后自动 rebalance；未提交 offset 的记录会重投。
+            tasks = await incident_queue.read_tasks(
+                consumer_name=self.consumer_name,
+                count=1,
+                block_ms=settings.diagnosis_worker_block_ms,
+            )
             if not tasks:
                 continue
             for message_id, item in tasks:
@@ -70,12 +64,9 @@ class DiagnosisWorker:
 
     async def stop(self) -> None:
         self._stopping.set()
-        if self._heartbeat_task:
-            self._heartbeat_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._heartbeat_task
         await mcp_client_manager.close()
         await incident_queue.close()
+        await close_redis_client()
         await close_postgres()
 
     async def handle_message(self, message_id: str, item: dict[str, Any]) -> None:
@@ -99,10 +90,9 @@ class DiagnosisWorker:
             return
 
         if str(task.get("status") or "") == "succeeded":
-            # 幂等保护: Redis 里可能有重复消息, 但 Postgres 已经表明任务完成。
-            # 这种情况直接 ACK, 不重复跑诊断, 避免重复写 Evidence。
+            # 幂等保护: Kafka 是 at-least-once，Postgres 已完成时只提交 offset。
             logger.info(f"[diagnosis-worker] task={task_id} already succeeded, ack duplicate")
-            await incident_queue.ack(message_id, stream=item.get("__stream__"))
+            await incident_queue.ack(message_id)
             return
 
         attempts = int(task.get("attempts") or 0)
@@ -147,7 +137,7 @@ class DiagnosisWorker:
                 agent_run_id=result.agent_run_id,
                 evidence_ids=result.evidence_ids,
             )
-            await incident_queue.ack(message_id, stream=item.get("__stream__"))
+            await incident_queue.ack(message_id)
             logger.info(
                 f"[diagnosis-worker] task={task_id} succeeded "
                 f"run={result.agent_run_id} evidence={len(result.evidence_ids)} "
@@ -185,12 +175,12 @@ class DiagnosisWorker:
             )
             return
 
-        # 仍可重试: 先把 Postgres 状态改回 pending, 再重新 XADD 一条消息,
-        # 最后 ACK 当前失败消息。这个顺序避免"状态显示 pending 但队列没消息"。
+        # 仍可重试: 先把 Postgres 状态改回 pending，再发一条 Kafka 记录，
+        # 最后提交当前 offset。这个顺序避免"状态显示 pending 但队列没消息"。
         await incident_repository.mark_task_retry_pending(task_id, error)
         new_message_id = await self._reenqueue_task(task_id, item, task or {})
         await incident_repository.set_task_queue_message(task_id, new_message_id)
-        await incident_queue.ack(message_id, stream=item.get("__stream__"))
+        await incident_queue.ack(message_id)
         logger.warning(
             f"[diagnosis-worker] task={task_id} retry scheduled "
             f"attempts={attempts}/{max_attempts} old_msg={message_id} new_msg={new_message_id}"
@@ -202,7 +192,7 @@ class DiagnosisWorker:
         item: dict[str, Any],
         task: dict[str, Any],
     ) -> str:
-        """把同一个 task 重新投回 Redis Stream, 等下一轮 attempt。"""
+        """把同一个 task 重新投回 Kafka，等待下一轮 attempt。"""
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else None
         if payload is None:
             payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
@@ -230,25 +220,6 @@ class DiagnosisWorker:
             payload=payload,
             level=item.get("level"),  # 重试保持原优先级, 不降级
         )
-
-    async def _claim_stale_tasks_once(self) -> list[tuple[str, dict[str, Any]]]:
-        """认领崩溃/超时 Worker 留下的 pending 任务 (XAUTOCLAIM 回收)。"""
-        return await incident_queue.claim_stale_tasks(
-            consumer_name=self.consumer_name,
-            min_idle_ms=settings.diagnosis_worker_reclaim_idle_ms,
-            count=settings.diagnosis_worker_reclaim_count,
-        )
-
-    async def _heartbeat_loop(self) -> None:
-        """Worker 进程活着期间, 定期刷新 Redis 心跳 key (用于 stale 检测)。"""
-        while not self._stopping.is_set():
-            try:
-                await incident_queue.heartbeat(self.consumer_name)
-            except Exception as exc:
-                logger.warning(
-                    f"[diagnosis-worker] heartbeat failed: {type(exc).__name__}: {exc}"
-                )
-            await asyncio.sleep(settings.diagnosis_worker_heartbeat_interval_sec)
 
 
 def _parse_args() -> argparse.Namespace:

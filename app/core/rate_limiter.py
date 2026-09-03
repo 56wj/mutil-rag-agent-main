@@ -28,8 +28,8 @@ async def _redis() -> Any | None:
     if not settings.rate_limit_enabled:
         return None
     try:
-        from app.queue.redis_streams import incident_queue
-        return await incident_queue.client()
+        from app.core.redis_client import get_redis_client
+        return await get_redis_client()
     except Exception as exc:  # pragma: no cover
         logger.warning(f"[ratelimit] Redis 不可达, 限流降级放行: {type(exc).__name__}: {exc}")
         return None

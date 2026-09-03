@@ -1,7 +1,7 @@
 """共享诊断图运行器。
 
 API 与 Worker 调用方的统一入口: fast / deep 图都从这里 astream, 输出结构化运行时事件。
-本模块不知道 SSE、HTTP、Redis 队列消费或 Postgres 审计 —— 那些是 services 层 / Worker
+本模块不知道 SSE、HTTP、Kafka 队列消费或 Postgres 审计 —— 那些是 services 层 / Worker
 层的事。诊断收尾时把报告 ingest 进 LLM Wiki 是唯一的副作用 (best-effort)。
 """
 

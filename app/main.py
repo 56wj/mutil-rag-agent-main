@@ -30,10 +30,11 @@ from app.api.v1 import aiops, chat, documents, eval as eval_api, health, inciden
 from app.config import settings
 from app.core.mcp_client import mcp_client_manager
 from app.core.milvus import milvus_manager
+from app.core.redis_client import close_redis_client
 from app.db.postgres import close_postgres, connect_postgres, init_incident_schema
 from app.exceptions import AppException
 from app.logging_config import setup_logging
-from app.queue.redis_streams import incident_queue
+from app.queue.kafka import incident_queue
 from app.schemas.common import ApiResponse
 
 
@@ -59,7 +60,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 2. 连接 Milvus (必需依赖, 失败则启动失败)
     milvus_manager.connect()
 
-    # 3. 初始化 Incident Pipeline (Postgres 事实库 + Redis Stream 队列)
+    # 3. 初始化 Incident Pipeline (Postgres 事实库 + Kafka 队列)
     if settings.incident_pipeline_enabled:
         await connect_postgres()
         await init_incident_schema()
@@ -76,6 +77,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.incident_pipeline_enabled:
         await incident_queue.close()
         await close_postgres()
+    await close_redis_client()
     milvus_manager.disconnect()
     logger.info("应用已关闭")
 

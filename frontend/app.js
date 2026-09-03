@@ -297,7 +297,7 @@ async function runAiopsRealtime(query) {
     }
 }
 
-// 排队模式: 提交到 Redis 队列, 后台 Worker 执行; 前端轮询任务状态直到出报告。
+// 排队模式: 提交到 Kafka, 后台 Worker 执行; 前端轮询任务状态直到出报告。
 // 价值: 高并发下 API 立刻返回, 不被长诊断拖住; 能看到"排队位置"。
 async function submitAiopsToQueue(query) {
     const planEl = document.getElementById("aiops-plan");
@@ -1045,7 +1045,7 @@ async function loadQueueStatus() {
         }
         card.classList.remove("hidden");
         setText("inc-q-depth", data.depth != null ? String(data.depth) : "—");
-        setText("inc-q-pending", data.pending != null ? String(data.pending) : "—");
+        setText("inc-q-pending", data.lag != null ? String(data.lag) : "—");
         setText("inc-q-workers", data.alive_workers != null ? `${data.alive_workers}/${(data.workers || []).length}` : `${(data.workers || []).length}`);
         setText("inc-q-dlq", data.dlq_depth != null ? String(data.dlq_depth) : "—");
         // 并发槽占用 (分布式限流): 手动 / Worker
@@ -1060,7 +1060,7 @@ async function loadQueueStatus() {
             const order = ["critical", "high", "normal", "low"];
             levelStr = " · " + order.filter((k) => lv[k] != null).map((k) => `${k[0].toUpperCase()}:${lv[k]}`).join(" ");
         }
-        setText("inc-q-stream", `group=${data.consumer_group || "?"}${levelStr}`);
+        setText("inc-q-stream", `topic=${data.topic || "?"} · group=${data.consumer_group || "?"}${levelStr}`);
         const warnEl = document.getElementById("inc-q-warnings");
         if (warnEl) {
             const warns = data.warnings || [];

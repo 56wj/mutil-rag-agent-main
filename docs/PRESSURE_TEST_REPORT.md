@@ -4,6 +4,9 @@
 测试对象：Multi-Agent AIOps Platform V3  
 测试范围：API 接入、队列削峰、Webhook 洪峰、限流保护、Worker 执行并发
 
+> 历史基线说明：本报告采集于 Redis Streams 队列时期。项目现已迁移到 Kafka，
+> 原始数值仅作迁移前基线，Kafka 的吞吐、consumer lag 与 rebalance 需要重新压测。
+
 ## 1. 测试结论
 
 当前配置下，系统可以同时接收较高并发的请求，但会把真正昂贵的诊断执行限制在一个可控范围内。
@@ -37,7 +40,7 @@ Worker 数量 = 3
 | 部署方式 | Docker Compose |
 | API 服务 | FastAPI + Uvicorn |
 | Worker 数量 | 3 |
-| 队列 | Redis Streams |
+| 队列 | Redis Streams（迁移前） |
 | 事实库 | Postgres |
 | 向量库 | Milvus |
 | 工具接入 | MCP |

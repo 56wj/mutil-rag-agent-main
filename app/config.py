@@ -117,66 +117,83 @@ class Settings(BaseSettings):
     database_pool_max_size: int = Field(default=10, description="Postgres 连接池最大连接数")
     incident_pipeline_enabled: bool = Field(
         default=True,
-        description="是否启用工业化 Incident Pipeline: Webhook 入库 + Redis Stream 入队",
+        description="是否启用工业化 Incident Pipeline: Webhook 入库 + Kafka 入队",
     )
     incident_time_bucket_sec: int = Field(
         default=300,
         description="Incident 聚合时间桶秒数, 用于没有 groupKey 时生成 correlation_key",
     )
-    incident_queue_stream: str = Field(
-        default="aiops:incident_tasks",
-        description="Redis Streams 中的诊断任务 stream 名",
+    kafka_bootstrap_servers: str = Field(
+        default="localhost:9092",
+        description="Kafka bootstrap servers，多个地址用逗号分隔",
     )
-    incident_queue_dlq_stream: str = Field(
-        default="aiops:incident_tasks:dlq",
+    kafka_incident_topic: str = Field(
+        default="aiops.incident-tasks",
+        description="Kafka 诊断任务基础 topic 名",
+    )
+    kafka_incident_dlq_topic: str = Field(
+        default="aiops.incident-tasks.dlq",
         description=(
-            "Redis Streams 死信队列 stream 名. "
+            "Kafka 死信 topic 名. "
             "为什么需要: 超过最大重试次数或消息格式损坏时, 不能无限重试, "
             "也不能静默丢弃, 所以把原消息和失败原因转移到 DLQ 供人工排查."
         ),
     )
-    incident_queue_consumer_group: str = Field(
+    kafka_consumer_group: str = Field(
         default="diagnosis-workers",
-        description="Redis Streams consumer group 名",
+        description="Kafka consumer group 名",
     )
     incident_queue_priority_enabled: bool = Field(
         default=True,
         description=(
             "是否启用优先级队列 (改造文档第 4 步). 开启后任务按严重度分流到 "
-            "{stream}:critical/high/normal/low 四条 Stream, Worker 按 critical→high→normal→low "
-            "顺序消费, 严重告警真正插队. 关闭则回落单 Stream FIFO."
+            "{topic}.critical/high/normal/low 四个 Kafka topic, Worker 按 "
+            "critical→high→normal→low 顺序消费. 关闭则回落单 topic FIFO."
         ),
     )
-    incident_queue_maxlen: int = Field(
-        default=10000,
-        description="Redis Streams 近似最大长度, 防止演示环境无限增长",
+    kafka_topic_partitions: int = Field(
+        default=3,
+        description="自动创建诊断 topic 时使用的分区数；应不小于 Worker 副本数",
     )
+    kafka_topic_replication_factor: int = Field(
+        default=1,
+        description="自动创建诊断 topic 时使用的副本数",
+    )
+    kafka_topic_retention_ms: int = Field(
+        default=604800000,
+        description="诊断 topic 和 DLQ 的保留时间，默认 7 天",
+    )
+    kafka_auto_create_topics: bool = Field(
+        default=True,
+        description="应用启动时是否通过 Kafka Admin API 创建缺失的 topic",
+    )
+    kafka_auto_offset_reset: str = Field(
+        default="earliest",
+        description="consumer group 没有已提交 offset 时从 earliest 或 latest 开始",
+    )
+    kafka_request_timeout_ms: int = Field(
+        default=30000,
+        description="Kafka 客户端请求超时毫秒数",
+    )
+    kafka_max_poll_interval_ms: int = Field(
+        default=900000,
+        description="Kafka Worker 两次 poll 的最大间隔；必须大于单任务超时",
+    )
+    kafka_security_protocol: str = Field(
+        default="PLAINTEXT",
+        description="Kafka security.protocol，如 PLAINTEXT 或 SASL_PLAINTEXT",
+    )
+    kafka_sasl_mechanism: str = Field(default="PLAIN", description="Kafka SASL mechanism")
+    kafka_sasl_username: str = Field(default="", description="Kafka SASL 用户名")
+    kafka_sasl_password: str = Field(default="", description="Kafka SASL 密码")
+    kafka_client_id: str = Field(default="multi-agent-aiops", description="Kafka client.id 前缀")
     diagnosis_worker_consumer_name: str = Field(
         default="worker-1",
         description="Diagnosis Worker 默认 consumer 名",
     )
     diagnosis_worker_block_ms: int = Field(
         default=5000,
-        description="Diagnosis Worker 读取 Redis Stream 的阻塞等待毫秒数",
-    )
-    diagnosis_worker_reclaim_idle_ms: int = Field(
-        default=900000,
-        description=(
-            "Pending 消息空闲多久后允许被其他 Worker 认领, 默认 15 分钟. "
-            "为什么要比单次普通诊断长: 避免长诊断还在运行时被别的 Worker 重复执行."
-        ),
-    )
-    diagnosis_worker_reclaim_count: int = Field(
-        default=5,
-        description="每轮最多回收多少条 stale pending 任务, 防止一次回收太多压垮 Worker.",
-    )
-    diagnosis_worker_heartbeat_interval_sec: int = Field(
-        default=10,
-        description="Worker heartbeat 写入 Redis 的间隔秒数.",
-    )
-    diagnosis_worker_heartbeat_ttl_sec: int = Field(
-        default=30,
-        description="Worker heartbeat key 的 TTL 秒数, 过期表示该 Worker 可能已经退出.",
+        description="Diagnosis Worker 轮询 Kafka topic 的最长等待毫秒数",
     )
     diagnosis_task_timeout_sec: int = Field(
         default=600,
@@ -199,7 +216,7 @@ class Settings(BaseSettings):
 
     # ==================== LLM Wiki (Karpathy 模式, 取代 M10 自反思) ====================
     # 诊断收尾 ingest -> LLM 合并相关 markdown 页 (data/wiki/); 诊断前读 index 优先召回。
-    # 无独立 worker / 无 Redis 流 / 无向量库。见 data/wiki/CONVENTIONS.md。
+    # 无独立 worker / 无独立消息队列 / 无向量库。见 data/wiki/CONVENTIONS.md。
     wiki_enabled: bool = Field(
         default=True,
         description="是否在诊断收尾把本次诊断 ingest 进 LLM Wiki (data/wiki/)。关掉只是不沉淀, 不影响诊断。",
@@ -646,6 +663,22 @@ class Settings(BaseSettings):
         value = (v or "dashscope").lower().strip()
         if value not in {"dashscope", "ollama"}:
             raise ValueError("embedding_provider 只能是 dashscope 或 ollama")
+        return value
+
+    @field_validator("kafka_auto_offset_reset")
+    @classmethod
+    def _normalize_kafka_auto_offset_reset(cls, v: str) -> str:
+        value = (v or "earliest").lower().strip()
+        if value not in {"earliest", "latest"}:
+            raise ValueError("kafka_auto_offset_reset 只能是 earliest 或 latest")
+        return value
+
+    @field_validator("kafka_security_protocol")
+    @classmethod
+    def _normalize_kafka_security_protocol(cls, v: str) -> str:
+        value = (v or "PLAINTEXT").upper().strip()
+        if value not in {"PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"}:
+            raise ValueError("kafka_security_protocol 配置无效")
         return value
 
     def validate_runtime(self) -> None:

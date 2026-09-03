@@ -17,7 +17,7 @@ from app.config import settings
 from app.core import rate_limiter
 from app.incidents.models import DiagnosisMode
 from app.incidents.repository import incident_repository
-from app.queue.redis_streams import incident_queue, level_for_severity
+from app.queue.kafka import incident_queue, level_for_severity
 from app.schemas.aiops import DiagnosisRequest
 import app.services.aiops_service as aiops_service
 
@@ -40,7 +40,7 @@ async def submit_diagnose(req: DiagnoseSubmitRequest, request: Request) -> dict[
 
     和旧的同步 `/aiops/diagnose` (SSE 内联跑) 并存, 互不影响:
       - 高并发场景用本接口, API 立刻返回, 不被长诊断拖住;
-      - 任务进 Postgres + Redis Streams, Worker 按 worker_diagnosis 并发槽慢慢消费;
+      - 任务进 Postgres + Kafka, Worker 按 worker_diagnosis 并发槽慢慢消费;
       - 返回 queue_position 让前端显示『前方还有 N 个』。
     """
     # 限流 (改造文档第 8 步): 单 IP 每分钟手动诊断次数上限, 超限 429

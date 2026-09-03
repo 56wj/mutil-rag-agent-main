@@ -7,14 +7,14 @@ from typing import Any
 from fastapi import APIRouter
 
 from app.config import settings
-from app.queue.redis_streams import incident_queue
+from app.queue.kafka import incident_queue
 
 router = APIRouter(prefix="/queue", tags=["queue"])
 
 
 @router.get("/status", summary="诊断队列水位 / Worker 存活")
 async def get_queue_status() -> dict[str, Any]:
-    """暴露 Redis Streams 主队列 + DLQ + consumer 状态.
+    """暴露 Kafka 主 topic + DLQ + consumer lag/Worker 状态.
 
     前端事件中心顶部用这个画"队列深度 / 排队 / Worker 数"卡, 让 SRE 一眼看清
     任务是堵着还是消费正常. 配置未开启 Incident Pipeline 时返回 configured=false.

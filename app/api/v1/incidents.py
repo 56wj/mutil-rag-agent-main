@@ -12,7 +12,7 @@ from app.incidents.models import DiagnosisMode
 from app.orchestration.repository import agent_run_repository
 from app.evidence.repository import evidence_repository
 from app.incidents.repository import incident_repository
-from app.queue.redis_streams import incident_queue, level_for_severity
+from app.queue.kafka import incident_queue, level_for_severity
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
@@ -111,7 +111,7 @@ async def create_incident_from_chat(req: FromChatRequest) -> dict[str, Any]:
 
     行为:
       1. 调 IncidentRepository.create_manual_task 写入事实表 (alerts / incident_groups / incidents / diagnosis_tasks)
-      2. 若 incident_pipeline_enabled, 把任务推入 Redis Stream 让 Worker 接管异步诊断
+      2. 若 incident_pipeline_enabled, 把任务推入 Kafka 让 Worker 接管异步诊断
       3. 返回 task_id / incident_group_id, 前端跳到事件中心 + 选中
     """
     try:

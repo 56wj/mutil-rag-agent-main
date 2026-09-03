@@ -36,7 +36,8 @@ langchain-milvus>=0.3.3,<0.4.0
 rank_bm25>=0.2.2
 
 # ---------- MCP (Model Context Protocol) ----------
-fastmcp>=2.14.0
+fastmcp>=2.14.0,<3.0.0
+mcp>=1.9.2,<2.0.0
 langchain-mcp-adapters>=0.2.1,<0.3.0
 
 # ---------- 配置与数据校验 ----------
@@ -55,6 +56,7 @@ markdown-it-py>=3.0.0
 tiktoken>=0.7.0
 PyYAML>=6.0  # SKILL.md frontmatter 解析
 redis>=5.0.0
+aiokafka>=0.14.0,<0.15.0
 rank-bm25
 asyncpg>=0.29.0
 

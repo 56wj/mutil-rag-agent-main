@@ -79,7 +79,7 @@
                     </div>
                     <div class="flex items-center justify-between gap-3">
                         <span class="text-xs font-semibold text-slate-600">提交方式</span>
-                        <div id="aiops-submit-mode" class="flex border border-slate-300 overflow-hidden shrink-0" title="实时: 同步流式诊断, 直接看计划/步骤/报告; 排队: 提交到 Redis 队列由后台 Worker 执行, 高并发下不阻塞 API, 可看排队位置">
+                        <div id="aiops-submit-mode" class="flex border border-slate-300 overflow-hidden shrink-0" title="实时: 同步流式诊断, 直接看计划/步骤/报告; 排队: 提交到 Kafka 由后台 Worker 执行, 高并发下不阻塞 API, 可看排队位置">
                             <button type="button" data-aiops-submit-mode="realtime" class="diagnosis-mode-btn">实时</button>
                             <button type="button" data-aiops-submit-mode="queue" class="diagnosis-mode-btn">排队</button>
                         </div>
@@ -179,7 +179,7 @@
             <div id="inc-queue-card" class="inc-queue-card hidden mb-3 flex items-center flex-wrap gap-5 text-xs">
                 <div class="eyebrow">任务队列</div>
                 <div><span class="text-slate-500">深度</span> <span id="inc-q-depth" class="font-mono" style="color:var(--text-primary)">—</span></div>
-                <div><span class="text-slate-500">未 ACK</span> <span id="inc-q-pending" class="font-mono" style="color:var(--st-pending)">—</span></div>
+                <div><span class="text-slate-500">消费 lag</span> <span id="inc-q-pending" class="font-mono" style="color:var(--st-pending)">—</span></div>
                 <div><span class="text-slate-500">活跃 Worker</span> <span id="inc-q-workers" class="font-mono" style="color:var(--st-success)">—</span></div>
                 <div><span class="text-slate-500">死信</span> <span id="inc-q-dlq" class="font-mono" style="color:var(--st-failed)">—</span></div>
                 <div><span class="text-slate-500">手动槽</span> <span id="inc-q-slot-manual" class="font-mono" style="color:var(--text-primary)">—</span></div>

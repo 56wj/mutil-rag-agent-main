@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # 一键本地拉起高并发架构 (改造文档第 10 步), 适合 macOS/Linux 演示:
-#   1) docker compose 起基础设施 (redis / postgres / milvus / open-websearch)
+#   1) docker compose 起基础设施 (kafka / redis / postgres / milvus / open-websearch)
 #   2) 后台起 1 个多-worker uvicorn API
-#   3) 后台起 N 个诊断 Worker (worker-1..N), 共享 Redis 全局并发槽 + 优先级队列
+#   3) 后台起 N 个诊断 Worker (worker-1..N), 消费 Kafka 优先级 topic
 #
 # 用法:
 #   scripts/run_all.sh                # 默认 3 个 worker
@@ -26,10 +26,16 @@ mkdir -p logs .run
 # 1) 基础设施 (仅基础设施, 不带 app profile)
 if [[ "${SKIP_INFRA:-0}" != "1" ]]; then
   echo "[run_all] 启动基础设施 (docker compose up -d)..."
-  docker compose up -d redis postgres etcd minio standalone open-websearch
-  echo "[run_all] 等待 Redis / Postgres 就绪..."
-  for _ in $(seq 1 30); do
-    if docker compose exec -T redis redis-cli ping >/dev/null 2>&1; then break; fi
+  docker compose up -d kafka redis postgres etcd minio standalone open-websearch
+  echo "[run_all] 等待 Kafka / Redis / Postgres 就绪..."
+  for _ in $(seq 1 60); do
+    if docker compose exec -T kafka /opt/kafka/bin/kafka-topics.sh \
+      --bootstrap-server localhost:9092 --list >/dev/null 2>&1 \
+      && docker compose exec -T redis redis-cli ping >/dev/null 2>&1 \
+      && docker compose exec -T postgres pg_isready -U "${POSTGRES_USER:-multi_agent}" \
+        -d "${POSTGRES_DB:-multi_agent_aiops}" >/dev/null 2>&1; then
+      break
+    fi
     sleep 1
   done
 fi

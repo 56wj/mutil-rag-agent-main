@@ -12,7 +12,7 @@
     # 混合优先级: 随机 severity, 验证 critical 插队
     python scripts/loadtest.py submit --n 100 --concurrency 50 --severity mix
 
-    # 场景二: 500 条告警快速推送 (webhook 快速返回, 去重, 进 Redis)
+    # 场景二: 500 条告警快速推送 (webhook 快速返回, 去重, 进 Kafka)
     python scripts/loadtest.py webhook --n 500 --concurrency 100
 
     # 验证限流: 单 IP 狂刷, 看 429 命中比例
