@@ -15,6 +15,7 @@ venv/
 
 # Logs / runtime
 logs/
+.run/
 *.log
 *.log.err
 *.out.log
@@ -57,3 +58,7 @@ coverage/
 *.sqlite
 *.sqlite3
 *.db
+# Parent/Child evaluation snapshots, isolated-run state, and generated reports
+benchmark/parent_child/runs/
+benchmark/reports/agent_strategy_*.json
+benchmark/reports/docker-settings-store*.json

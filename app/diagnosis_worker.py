@@ -24,6 +24,15 @@ from app.core.mcp_client import mcp_client_manager
 from app.core.redis_client import close_redis_client
 from app.db.postgres import close_postgres, connect_postgres, init_incident_schema
 from app.incidents.repository import incident_repository
+from app.logging_config import setup_logging
+from app.observability.metrics import record_kafka, start_worker_metrics_server
+from app.observability.langfuse_client import flush_langfuse
+from app.observability.tracing import (
+    current_trace_id,
+    extract_trace_context,
+    setup_tracing,
+    start_span,
+)
 from app.queue.kafka import incident_queue
 
 
@@ -44,11 +53,18 @@ class DiagnosisWorker:
         self._stopping = asyncio.Event()
 
     async def start(self) -> None:
+        setup_tracing("worker")
+        metrics_started = False
+        if settings.observability_enabled and settings.metrics_enabled:
+            metrics_started = start_worker_metrics_server(settings.worker_metrics_port)
         await connect_postgres()
         await init_incident_schema()
         await incident_queue.connect()
         await mcp_client_manager.connect(fail_silently=True)
-        logger.info(f"[diagnosis-worker] started consumer={self.consumer_name}")
+        logger.info(
+            f"[diagnosis-worker] started consumer={self.consumer_name} "
+            f"metrics_port={settings.worker_metrics_port if metrics_started else 'disabled'}"
+        )
 
         while not self._stopping.is_set():
             # Kafka 在 Worker 退出或失联后自动 rebalance；未提交 offset 的记录会重投。
@@ -64,12 +80,34 @@ class DiagnosisWorker:
 
     async def stop(self) -> None:
         self._stopping.set()
+        flush_langfuse()
         await mcp_client_manager.close()
         await incident_queue.close()
         await close_redis_client()
         await close_postgres()
 
     async def handle_message(self, message_id: str, item: dict[str, Any]) -> None:
+        carrier = item.get("trace_context")
+        parent_context = extract_trace_context(carrier if isinstance(carrier, dict) else None)
+        task_id = str(item.get("task_id") or "")
+        with start_span(
+            "kafka.incident.consume",
+            context=parent_context,
+            kind="consumer",
+            attributes={
+                "messaging.system": "kafka",
+                "messaging.operation.name": "process",
+                "messaging.message.id": message_id,
+                "aiops.task.id": task_id or "missing",
+                "aiops.diagnosis.mode": str(item.get("diagnosis_mode") or "unknown"),
+                "aiops.incident.priority": str(item.get("level") or "unknown"),
+            },
+        ):
+            trace_id = current_trace_id() or "-"
+            with logger.contextualize(trace_id=trace_id, task_id=task_id or "-"):
+                await self._process_message(message_id, item)
+
+    async def _process_message(self, message_id: str, item: dict[str, Any]) -> None:
         task_id = str(item.get("task_id") or "")
         if not task_id:
             logger.warning(f"[diagnosis-worker] message={message_id} missing task_id, DLQ")
@@ -181,6 +219,7 @@ class DiagnosisWorker:
         new_message_id = await self._reenqueue_task(task_id, item, task or {})
         await incident_repository.set_task_queue_message(task_id, new_message_id)
         await incident_queue.ack(message_id)
+        record_kafka("retry", "scheduled", str(item.get("level") or "base"))
         logger.warning(
             f"[diagnosis-worker] task={task_id} retry scheduled "
             f"attempts={attempts}/{max_attempts} old_msg={message_id} new_msg={new_message_id}"
@@ -234,6 +273,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 async def main(consumer_name: str | None = None) -> None:
+    setup_logging()
     worker = DiagnosisWorker(consumer_name=consumer_name)
     try:
         await worker.start()

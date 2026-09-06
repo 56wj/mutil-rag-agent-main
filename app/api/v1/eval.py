@@ -1,7 +1,7 @@
 """评估结果只读 API.
 
-把 benchmark/reports/ 下的 retrieval / ragas 报告暴露给前端, 让"检索质量"
-可视化, 不再只能 cat JSON. 这是 RAG 半边产品化的关键差异点.
+把 benchmark/reports/ 下的 retrieval / ragas / agent_strategy 报告暴露给前端，
+让检索质量和 fast/deep 策略差异可查询，不再只能 cat JSON。
 
 约定: 报告文件名形如 `<mode>_YYYYMMDD-HHMMSS.json`, 由 benchmark/run_benchmark.py 写入.
 """
@@ -103,13 +103,20 @@ def _summarize(payload: dict[str, Any]) -> dict[str, Any]:
             "groundedness": oe.get("groundedness"),
             "helpfulness": oe.get("helpfulness"),
         })
+    elif mode == "agent_strategy":
+        summary.update({
+            "cases": payload.get("cases"),
+            "strategies": payload.get("strategies"),
+            "strategy_summary": payload.get("summary"),
+            "deep_minus_fast": payload.get("deep_minus_fast"),
+        })
     return summary
 
 
 @router.get("/reports", summary="列出最近评估报告")
 async def list_reports(
     limit: int = Query(20, ge=1, le=200),
-    mode: str | None = Query(None, description="可选: 只列某种模式 (retrieval / ragas)"),
+    mode: str | None = Query(None, description="可选: retrieval / ragas / agent_strategy"),
 ) -> dict[str, Any]:
     """按 mtime 倒序返回报告概览, 不含 details (太大)."""
     if not REPORTS_DIR.exists():

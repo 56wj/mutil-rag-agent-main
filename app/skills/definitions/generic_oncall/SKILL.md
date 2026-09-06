@@ -7,6 +7,12 @@ triggers:
   - 不确定
   - 排查
 allowed_tools:
+  - prom_query
+  - prom_query_range
+  - prom_active_alerts
+  - prom_label_values
+  - loki_query_range
+  - loki_label_values
   - search_knowledge_base
   - get_current_time
   - get_local_system_overview
@@ -35,6 +41,7 @@ risk_level: low
 
 ## 数据源选择 (重要)
 判断用户是问"远程生产服务"还是"本机/自己的电脑":
+- 配置了 Prometheus/Loki 且涉及远程服务 → 优先用 `prom_*` 与 `loki_*` 拉真实时序证据，再用知识库解释
 - 涉及"我电脑/我笔记本/本机/这台机器/我的设备"或没有任何远程主机名 → **优先用本机系统工具** (`get_local_system_overview` / `get_local_cpu_memory` / `get_local_disk_usage` / `list_top_processes`), 这是真实数据
 - 涉及网络目标 → 用 `ping_host` / `http_check` / `dns_lookup` / `check_port`
 - 涉及 Docker 容器 → 用 `docker_ps` / `docker_stats` / `docker_logs` / `docker_inspect`

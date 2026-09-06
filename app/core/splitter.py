@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from dataclasses import dataclass
 from typing import List
 
 from langchain_core.documents import Document
@@ -41,6 +42,51 @@ _HEADERS_TO_SPLIT_ON = [
     ("##", "h2"),
     ("###", "h3"),
 ]
+
+
+@dataclass(frozen=True)
+class ChunkingConfig:
+    """显式切分参数；未传 config 的生产调用保留原来的 settings 解析行为。
+
+    Markdown 标题边界、结构保护和章节前缀保持不变。评测仅改变 parent/child
+    字符上限，禁止通过调整标题边界人为放大 parent。
+    """
+
+    parent_size: int
+    child_size: int
+    child_overlap: int = 0
+    parent_overlap: int = 0
+
+    @classmethod
+    def production(cls) -> "ChunkingConfig":
+        """从当前生产 settings 构造配置（只读，不修改 settings）。"""
+        return cls(
+            parent_size=max(500, int(settings.rag_parent_max_chars or 2400)),
+            child_size=max(80, int(settings.rag_chunk_size or 300)),
+            child_overlap=max(0, int(settings.rag_chunk_overlap or 50)),
+            parent_overlap=0,
+        )
+
+    def validated(self) -> "ChunkingConfig":
+        parent_size = max(500, int(self.parent_size))
+        child_size = max(80, int(self.child_size))
+        child_overlap = max(0, int(self.child_overlap))
+        parent_overlap = max(0, int(self.parent_overlap))
+        if child_size >= parent_size:
+            raise ValueError(
+                f"parent_size 必须明显大于 child_size: {parent_size=} {child_size=}"
+            )
+        if child_overlap >= child_size:
+            raise ValueError("child_overlap 必须小于 child_size")
+        if parent_overlap >= parent_size:
+            raise ValueError("parent_overlap 必须小于 parent_size")
+        return ChunkingConfig(
+            parent_size=parent_size,
+            child_size=child_size,
+            child_overlap=child_overlap,
+            parent_overlap=parent_overlap,
+        )
+
 
 # 结构保护: 在这些 regex 区间内绝不切 (参考腾讯 WeKnora 6 种模式)
 _PROTECTED_PATTERNS = [
@@ -113,7 +159,12 @@ def _parent_id(content: str) -> str:
     return hashlib.md5(content.encode("utf-8")).hexdigest()[:12]
 
 
-def split_markdown(content: str, source: str) -> List[Document]:
+def split_markdown(
+    content: str,
+    source: str,
+    *,
+    config: ChunkingConfig | None = None,
+) -> List[Document]:
     """把 Markdown 切成 child Document chunks (parent-child + 结构保护)。
 
     Args:
@@ -134,9 +185,10 @@ def split_markdown(content: str, source: str) -> List[Document]:
         logger.warning(f"split_markdown: 空内容 source={source}")
         return []
 
-    parent_max = max(500, int(settings.rag_parent_max_chars or 2400))
-    child_size = max(80, int(settings.rag_chunk_size or 300))
-    child_overlap = max(0, int(settings.rag_chunk_overlap or 50))
+    cfg = ChunkingConfig.production() if config is None else config.validated()
+    parent_max = cfg.parent_size
+    child_size = cfg.child_size
+    child_overlap = cfg.child_overlap
 
     # ---------- 1. 按标题切, 得到天然父块候选 ----------
     md_splitter = MarkdownHeaderTextSplitter(
@@ -151,7 +203,7 @@ def split_markdown(content: str, source: str) -> List[Document]:
     # ---------- 2. 父块超长则二次切 (结构保护) ----------
     parent_splitter = RecursiveCharacterTextSplitter(
         chunk_size=parent_max,
-        chunk_overlap=0,  # 父块间无 overlap (避免父级内容重复存)
+        chunk_overlap=cfg.parent_overlap,
         separators=["\n\n", "\n", "。", "!", "?", "；", ";", " ", ""],
     )
 
@@ -201,6 +253,8 @@ def split_markdown(content: str, source: str) -> List[Document]:
             chunk_index += 1
 
     logger.info(
-        f"[splitter] {source}: sections={len(header_chunks)} parents={len(parents)} children={len(final)}"
+        f"[splitter] {source}: "
+        f"parent={parent_max}/{cfg.parent_overlap} child={child_size}/{child_overlap} "
+        f"sections={len(header_chunks)} parents={len(parents)} children={len(final)}"
     )
     return final

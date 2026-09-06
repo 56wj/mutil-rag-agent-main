@@ -57,6 +57,7 @@ class PlanExecuteState(TypedDict, total=False):
     diagnosis_mode: str
     requested_diagnosis_mode: str
     alert_signature: str
+    experience_recall_enabled: bool
     selected_skill: str
     skill_reason: str
     plan: List[str]

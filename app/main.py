@@ -15,13 +15,15 @@
   生产: uvicorn app.main:app --workers 4
 """
 
+import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
@@ -36,11 +38,29 @@ from app.exceptions import AppException
 from app.logging_config import setup_logging
 from app.queue.kafka import incident_queue
 from app.schemas.common import ApiResponse
+from app.observability.metrics import render_metrics
+from app.observability.tracing import setup_tracing
+from app.observability.langfuse_client import flush_langfuse
 
 
 # ============================================================
 # Lifespan: 启动/关闭钩子
 # ============================================================
+async def _refresh_queue_metrics() -> None:
+    """Refresh Kafka lag/DLQ gauges; the exporter must not depend on UI polling."""
+    interval = max(5, int(settings.queue_metrics_refresh_sec))
+    while True:
+        try:
+            await incident_queue.status()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                f"[observability] queue metrics refresh failed: {type(exc).__name__}: {exc}"
+            )
+        await asyncio.sleep(interval)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """应用生命周期管理.
@@ -61,10 +81,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     milvus_manager.connect()
 
     # 3. 初始化 Incident Pipeline (Postgres 事实库 + Kafka 队列)
+    queue_metrics_task: asyncio.Task[None] | None = None
     if settings.incident_pipeline_enabled:
         await connect_postgres()
         await init_incident_schema()
         await incident_queue.connect()
+        if (
+            settings.observability_enabled
+            and settings.metrics_enabled
+            and settings.queue_metrics_refresh_sec > 0
+        ):
+            queue_metrics_task = asyncio.create_task(
+                _refresh_queue_metrics(),
+                name="kafka-metrics-refresh",
+            )
 
     # 4. 加载 MCP 工具 (可选依赖, 失败仅 warning)
     await mcp_client_manager.connect(fail_silently=True)
@@ -73,12 +103,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
     # ==================== 关闭 ====================
     logger.info("应用正在关闭...")
+    if queue_metrics_task is not None:
+        queue_metrics_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await queue_metrics_task
     await mcp_client_manager.close()
     if settings.incident_pipeline_enabled:
         await incident_queue.close()
         await close_postgres()
     await close_redis_client()
     milvus_manager.disconnect()
+    flush_langfuse()
     logger.info("应用已关闭")
 
 
@@ -100,6 +135,7 @@ app = FastAPI(
 # 中间件
 # ============================================================
 setup_middlewares(app)
+setup_tracing("api", fastapi_app=app)
 
 
 # ============================================================
@@ -153,6 +189,15 @@ async def handle_unexpected_exception(
 # 路由注册
 # ============================================================
 API_PREFIX = "/api/v1"
+
+
+@app.get(settings.metrics_path, include_in_schema=False)
+async def prometheus_metrics() -> Response:
+    """Expose platform and AgentOps metrics for Prometheus scraping."""
+    if not settings.observability_enabled or not settings.metrics_enabled:
+        return Response(status_code=404)
+    payload, content_type = render_metrics()
+    return Response(content=payload, media_type=content_type)
 
 app.include_router(health.router, prefix=API_PREFIX)
 app.include_router(chat.router, prefix=API_PREFIX)

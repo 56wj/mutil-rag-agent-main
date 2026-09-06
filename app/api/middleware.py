@@ -13,6 +13,10 @@ from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 
+from app.observability.metrics import record_http
+from app.observability.tracing import current_trace_id
+from app.config import settings
+
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
     """为每个请求注入 X-Request-ID.
@@ -33,9 +37,17 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         request.state.request_id = request_id
 
         # 注入到 loguru context (覆盖默认值 "-")
-        with logger.contextualize(request_id=request_id):
+        with logger.contextualize(
+            request_id=request_id,
+            trace_id=current_trace_id() or "-",
+            task_id="-",
+        ):
             response = await call_next(request)
             response.headers["X-Request-ID"] = request_id
+            trace_id = current_trace_id()
+            if trace_id:
+                request.state.trace_id = trace_id
+                response.headers["X-Trace-ID"] = trace_id
             return response
 
 
@@ -52,18 +64,31 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         # 跳过静态资源和健康检查的访问日志, 避免刷屏
-        skip_log = path.startswith("/static") or path.endswith("/health")
+        skip_log = (
+            path.startswith("/static")
+            or path.endswith("/health")
+            or path.endswith("/health/ready")
+            or path == settings.metrics_path
+        )
 
         try:
             response = await call_next(request)
-            elapsed_ms = (time.perf_counter() - start) * 1000
+            elapsed_seconds = time.perf_counter() - start
+            elapsed_ms = elapsed_seconds * 1000
+            route = getattr(request.scope.get("route"), "path", None) or path
+            if path != settings.metrics_path:
+                record_http(method, route, response.status_code, elapsed_seconds)
             if not skip_log:
                 logger.info(
                     f"{method} {path} -> {response.status_code} ({elapsed_ms:.1f}ms)"
                 )
             return response
         except Exception as e:
-            elapsed_ms = (time.perf_counter() - start) * 1000
+            elapsed_seconds = time.perf_counter() - start
+            elapsed_ms = elapsed_seconds * 1000
+            route = getattr(request.scope.get("route"), "path", None) or path
+            if path != settings.metrics_path:
+                record_http(method, route, 500, elapsed_seconds)
             logger.exception(
                 f"{method} {path} -> EXCEPTION ({elapsed_ms:.1f}ms): {e}"
             )
@@ -89,5 +114,5 @@ def setup_middlewares(app: FastAPI) -> None:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["X-Request-ID"],
+        expose_headers=["X-Request-ID", "X-Trace-ID"],
     )

@@ -16,7 +16,7 @@ s06 范式 (借鉴 learn-claude-code 课程, 见 COURSE_SUMMARY.md):
   - 本机 system 工具全是 read-only, 跳过 PermissionMode 在骨架阶段安全可控。
 
 TODO(M7+):
-  - 真后端: 接 Prometheus / VictoriaMetrics 等真 metric 数据源 (本机指标是骨架演示);
+  - 后端扩展: 增加云监控/多租户 Prometheus 鉴权适配器；
   - 权限: 接入 PermissionMode (现在 decisions=None 走 run_parallel_agent 的向后兼容路径);
   - 复用: 若多个专业 Agent 都需要"scoped LLM 循环 + Evidence 压制", 抽 specialist_runner 公共层。
 """
@@ -59,7 +59,8 @@ _SYSTEM_PROMPT = (
     "你的职责: 围绕给定的故障现象, 调用指标采集工具, 拿到结构化指标快照, "
     "找出**异常项**并压成一段中文 summary。\n\n"
     "硬性约束:\n"
-    "1. 只用本机指标采集工具 (CPU/内存/磁盘/进程), 不要谈日志/调用链/处置建议——那是别的 Agent 的事。\n"
+    "1. 配置 Prometheus 时优先使用 prom_* 查询远程真实指标；仅本机问题或 Prometheus 未配置时使用 CPU/内存/磁盘/进程工具。"
+    "不要谈日志/调用链/处置建议——那是别的 Agent 的事。\n"
     "2. summary 必须: 点名异常项及其指标值; 若无异常明确说\"未观察到异常\"; 不罗列全部数据, 只点关键 (<=300 字)。\n"
     "3. 最多 4 轮 LLM↔工具往返, 拿到必要数据就停, 不要漫游。\n"
     "4. 工具失败时直接说\"工具不可用\", 不要编造数据。"
@@ -71,7 +72,7 @@ def _build_user_prompt(incident_text: str) -> str:
     return (
         "故障现象:\n"
         f"{text}\n\n"
-        "请按上述约束采集本机指标, 找异常, 输出一段 summary。"
+        "请按上述约束采集真实指标, 找异常, 输出一段 summary。"
     )
 
 

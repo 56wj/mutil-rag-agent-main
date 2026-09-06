@@ -16,6 +16,8 @@ from loguru import logger
 
 from app.core.mcp_client import mcp_client_manager
 from app.tools.knowledge_tool import search_knowledge_base
+from app.tools.loki_tool import get_loki_tools
+from app.tools.prom_tool import get_prom_tools
 from app.tools.system_tool import (
     get_local_cpu_memory,
     get_local_disk_usage,
@@ -34,6 +36,8 @@ def get_local_tools() -> List[BaseTool]:
     没跑起来时仍能诊断本机.
     """
     return [
+        *get_prom_tools(),
+        *get_loki_tools(),
         search_knowledge_base,
         get_current_time,
         get_local_system_overview,

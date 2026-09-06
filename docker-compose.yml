@@ -151,6 +151,103 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # ============================================================
+  # AgentOps 可观测栈：metrics / logs / traces
+  # `--profile app` 会随应用一起启动；也可只启 `--profile observability`。
+  # ============================================================
+  prometheus:
+    container_name: multi-agent-prometheus
+    profiles: ["app", "observability"]
+    image: prom/prometheus:v3.13.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - multi_agent_prometheus:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    restart: unless-stopped
+
+  loki:
+    container_name: multi-agent-loki
+    profiles: ["app", "observability"]
+    image: grafana/loki:3.7.4
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./deploy/observability/loki.yml:/etc/loki/local-config.yaml:ro
+      - multi_agent_loki:/loki
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    restart: unless-stopped
+
+  tempo:
+    container_name: multi-agent-tempo
+    profiles: ["app", "observability"]
+    image: grafana/tempo:2.10.7
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./deploy/observability/tempo.yml:/etc/tempo.yaml:ro
+      - multi_agent_tempo:/var/tempo
+    ports:
+      - "${TEMPO_PORT:-3200}:3200"
+    restart: unless-stopped
+
+  otel-collector:
+    container_name: multi-agent-otel-collector
+    profiles: ["app", "observability"]
+    image: otel/opentelemetry-collector-contrib:0.157.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./deploy/observability/otel-collector.yml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "${OTEL_GRPC_PORT:-4317}:4317"
+      - "${OTEL_HTTP_PORT:-4318}:4318"
+    depends_on:
+      - tempo
+    restart: unless-stopped
+
+  alloy:
+    container_name: multi-agent-alloy
+    profiles: ["app", "observability"]
+    image: grafana/alloy:v1.18.1
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./deploy/observability/alloy.config:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - multi_agent_alloy:/var/lib/alloy/data
+    ports:
+      - "${ALLOY_PORT:-12345}:12345"
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  grafana:
+    container_name: multi-agent-grafana
+    profiles: ["app", "observability"]
+    image: grafana/grafana:13.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - multi_agent_grafana:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    restart: unless-stopped
+
   open-websearch:
     container_name: multi-agent-open-websearch
     build:
@@ -286,7 +383,11 @@ services:
       MCP_WINLOG_URL: http://mcp-winlog:8008/mcp
       MCP_NETWORK_URL: http://mcp-network:8009/mcp
       MCP_DOCKER_URL: http://mcp-docker:8011/mcp
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9900", "--workers", "4"]
+      PROMETHEUS_URL: ${PROMETHEUS_DOCKER_URL:-http://prometheus:9090}
+      LOKI_URL: ${LOKI_DOCKER_URL:-http://loki:3100}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_DOCKER_ENDPOINT:-http://otel-collector:4318}
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus_multiproc
+    command: ["/bin/sh", "-c", "mkdir -p /tmp/prometheus_multiproc && rm -f /tmp/prometheus_multiproc/*.db && exec uvicorn app.main:app --host 0.0.0.0 --port 9900 --workers 4"]
     ports:
       - "${APP_PORT:-9900}:9900"
     volumes:
@@ -311,6 +412,12 @@ services:
         condition: service_healthy
       mcp-docker:
         condition: service_healthy
+      prometheus:
+        condition: service_started
+      loki:
+        condition: service_started
+      otel-collector:
+        condition: service_started
     restart: unless-stopped
 
   worker-1:
@@ -333,9 +440,14 @@ services:
       MCP_WINLOG_URL: http://mcp-winlog:8008/mcp
       MCP_NETWORK_URL: http://mcp-network:8009/mcp
       MCP_DOCKER_URL: http://mcp-docker:8011/mcp
+      PROMETHEUS_URL: ${PROMETHEUS_DOCKER_URL:-http://prometheus:9090}
+      LOKI_URL: ${LOKI_DOCKER_URL:-http://loki:3100}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_DOCKER_ENDPOINT:-http://otel-collector:4318}
     command: ["python", "-m", "app.diagnosis_worker", "--name", "worker-1"]
     volumes:
       - ./data/wiki:/app/data/wiki
+    expose:
+      - "9910"
     depends_on:
       kafka:
         condition: service_healthy
@@ -353,6 +465,12 @@ services:
         condition: service_healthy
       mcp-docker:
         condition: service_healthy
+      prometheus:
+        condition: service_started
+      loki:
+        condition: service_started
+      otel-collector:
+        condition: service_started
     restart: unless-stopped
 
   worker-2:
@@ -375,9 +493,14 @@ services:
       MCP_WINLOG_URL: http://mcp-winlog:8008/mcp
       MCP_NETWORK_URL: http://mcp-network:8009/mcp
       MCP_DOCKER_URL: http://mcp-docker:8011/mcp
+      PROMETHEUS_URL: ${PROMETHEUS_DOCKER_URL:-http://prometheus:9090}
+      LOKI_URL: ${LOKI_DOCKER_URL:-http://loki:3100}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_DOCKER_ENDPOINT:-http://otel-collector:4318}
     command: ["python", "-m", "app.diagnosis_worker", "--name", "worker-2"]
     volumes:
       - ./data/wiki:/app/data/wiki
+    expose:
+      - "9910"
     depends_on:
       kafka:
         condition: service_healthy
@@ -395,6 +518,12 @@ services:
         condition: service_healthy
       mcp-docker:
         condition: service_healthy
+      prometheus:
+        condition: service_started
+      loki:
+        condition: service_started
+      otel-collector:
+        condition: service_started
     restart: unless-stopped
 
   worker-3:
@@ -417,9 +546,14 @@ services:
       MCP_WINLOG_URL: http://mcp-winlog:8008/mcp
       MCP_NETWORK_URL: http://mcp-network:8009/mcp
       MCP_DOCKER_URL: http://mcp-docker:8011/mcp
+      PROMETHEUS_URL: ${PROMETHEUS_DOCKER_URL:-http://prometheus:9090}
+      LOKI_URL: ${LOKI_DOCKER_URL:-http://loki:3100}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_DOCKER_ENDPOINT:-http://otel-collector:4318}
     command: ["python", "-m", "app.diagnosis_worker", "--name", "worker-3"]
     volumes:
       - ./data/wiki:/app/data/wiki
+    expose:
+      - "9910"
     depends_on:
       kafka:
         condition: service_healthy
@@ -437,6 +571,12 @@ services:
         condition: service_healthy
       mcp-docker:
         condition: service_healthy
+      prometheus:
+        condition: service_started
+      loki:
+        condition: service_started
+      otel-collector:
+        condition: service_started
     restart: unless-stopped
 
 networks:
@@ -450,3 +590,8 @@ volumes:
   multi_agent_redis:
   multi_agent_kafka:
   multi_agent_postgres:
+  multi_agent_prometheus:
+  multi_agent_loki:
+  multi_agent_tempo:
+  multi_agent_alloy:
+  multi_agent_grafana:

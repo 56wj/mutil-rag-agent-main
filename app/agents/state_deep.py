@@ -30,6 +30,7 @@ class DeepDiagnosisState(TypedDict, total=False):
     diagnosis_mode: str
     requested_diagnosis_mode: str
     alert_signature: str
+    experience_recall_enabled: bool
     transition_history: Annotated[List[StateTransition], operator.add]
 
     # —— 诊断对象上下文 (IncidentManager 填) ——

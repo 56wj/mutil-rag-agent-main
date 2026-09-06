@@ -33,14 +33,17 @@ def setup_logging() -> None:
         console_format = (
             "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
             "<level>{level: <8}</level> | "
-            "<cyan>{extra[request_id]}</cyan> | "
+            "<cyan>req={extra[request_id]}</cyan> | "
+            "<cyan>trace={extra[trace_id]}</cyan> | "
+            "<cyan>task={extra[task_id]}</cyan> | "
             "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
             "<level>{message}</level>"
         )
     else:
         console_format = (
             "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
-            "{extra[request_id]} | {name}:{function}:{line} | {message}"
+            "req={extra[request_id]} | trace={extra[trace_id]} | task={extra[task_id]} | "
+            "{name}:{function}:{line} | {message}"
         )
 
     logger.add(
@@ -64,7 +67,8 @@ def setup_logging() -> None:
         compression="zip",
         format=(
             "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
-            "{extra[request_id]} | {name}:{function}:{line} | {message}"
+            "req={extra[request_id]} | trace={extra[trace_id]} | task={extra[task_id]} | "
+            "{name}:{function}:{line} | {message}"
         ),
         encoding="utf-8",
         enqueue=True,  # 异步写入, 不阻塞主线程
@@ -73,7 +77,7 @@ def setup_logging() -> None:
     )
 
     # 给 logger 的 extra 设默认值, 避免 KeyError
-    logger.configure(extra={"request_id": "-"})
+    logger.configure(extra={"request_id": "-", "trace_id": "-", "task_id": "-"})
 
     # ---------- 拦截标准 logging ----------
     # uvicorn / fastapi / pymilvus 等用的是标准 logging, 拦截后统一用 loguru

@@ -16,6 +16,8 @@ from typing import Any
 from loguru import logger
 
 from app.config import settings
+from app.observability.metrics import record_kafka, set_kafka_lag
+from app.observability.tracing import inject_trace_context, mark_span_error, start_span
 
 PRIORITY_LEVELS = ["critical", "high", "normal", "low"]
 SCHEMA_VERSION = 1
@@ -265,22 +267,46 @@ class KafkaIncidentQueue:
             severity = str((payload or {}).get("severity") or "")
             level = level_for_severity(severity) if severity else level_for_priority(priority)
         topic = self._topic_for_level(level)
-        value = {
-            "schema_version": SCHEMA_VERSION,
-            "task_id": task_id,
-            "incident_group_id": incident_group_id,
-            "incident_id": incident_id,
-            "diagnosis_mode": diagnosis_mode,
-            "priority": int(priority),
-            "level": level,
-            "payload": payload or {},
-            "enqueued_at": datetime.now(timezone.utc).isoformat(),
-        }
-        metadata = await self._producer.send_and_wait(
-            topic,
-            key=task_id.encode("utf-8"),
-            value=json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"),
-        )
+        with start_span(
+            "kafka.incident.publish",
+            kind="producer",
+            attributes={
+                "messaging.system": "kafka",
+                "messaging.destination.name": topic,
+                "messaging.operation.name": "publish",
+                "aiops.diagnosis.mode": diagnosis_mode,
+                "aiops.incident.priority": level,
+            },
+        ) as span:
+            trace_context = inject_trace_context()
+            value = {
+                "schema_version": SCHEMA_VERSION,
+                "task_id": task_id,
+                "incident_group_id": incident_group_id,
+                "incident_id": incident_id,
+                "diagnosis_mode": diagnosis_mode,
+                "priority": int(priority),
+                "level": level,
+                "payload": payload or {},
+                # JSON carrier 兼容迁移/重放脚本；Kafka headers 是在线链路的标准传播面。
+                "trace_context": trace_context,
+                "enqueued_at": datetime.now(timezone.utc).isoformat(),
+            }
+            try:
+                metadata = await self._producer.send_and_wait(
+                    topic,
+                    key=task_id.encode("utf-8"),
+                    value=json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"),
+                    headers=[
+                        (key, val.encode("utf-8"))
+                        for key, val in trace_context.items()
+                    ],
+                )
+            except Exception as exc:
+                record_kafka("enqueue", "failed", level)
+                mark_span_error(span, exc)
+                raise
+        record_kafka("enqueue", "ok", level)
         message_id = self._format_message_id(metadata.topic, metadata.partition, metadata.offset)
         logger.info(
             f"[incident-queue] enqueued task={task_id} group={incident_group_id} "
@@ -306,6 +332,13 @@ class KafkaIncidentQueue:
                 records = await consumer.getmany(timeout_ms=0, max_records=max(1, count))
                 tasks = self._parse_records(records)
                 if tasks:
+                    for _, item in tasks:
+                        result = "decode_failed" if item.get("__decode_error__") else "ok"
+                        record_kafka(
+                            "consume",
+                            result,
+                            str(item.get("level") or self._level_from_topic(topic)),
+                        )
                     return tasks
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -331,6 +364,20 @@ class KafkaIncidentQueue:
                 item["__topic__"] = message.topic
                 item["__partition__"] = message.partition
                 item["__offset__"] = message.offset
+                header_carrier: dict[str, str] = {}
+                for key, raw_header in getattr(message, "headers", None) or []:
+                    if str(key).lower() not in {"traceparent", "tracestate", "baggage"}:
+                        continue
+                    try:
+                        header_carrier[str(key)] = (
+                            raw_header.decode("utf-8")
+                            if isinstance(raw_header, bytes)
+                            else str(raw_header)
+                        )
+                    except Exception:
+                        continue
+                if header_carrier:
+                    item["trace_context"] = header_carrier
                 message_id = self._format_message_id(
                     topic_partition.topic, topic_partition.partition, message.offset
                 )
@@ -356,7 +403,13 @@ class KafkaIncidentQueue:
             raise RuntimeError(f"Kafka topic={topic} 没有活动 consumer，不能提交 offset")
         from aiokafka import TopicPartition
 
-        await consumer.commit({TopicPartition(topic, partition): offset + 1})
+        level = self._level_from_topic(topic)
+        try:
+            await consumer.commit({TopicPartition(topic, partition): offset + 1})
+        except Exception:
+            record_kafka("ack", "failed", level)
+            raise
+        record_kafka("ack", "ok", level)
 
     async def dead_letter(
         self,
@@ -375,13 +428,19 @@ class KafkaIncidentQueue:
             "message": item,
         }
         task_id = str(item.get("task_id") or "")
-        metadata = await self._producer.send_and_wait(
-            settings.kafka_incident_dlq_topic,
-            key=(task_id or message_id).encode("utf-8"),
-            value=json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"),
-        )
+        level = str(item.get("level") or self._level_from_topic(str(item.get("__topic__") or "")))
+        try:
+            metadata = await self._producer.send_and_wait(
+                settings.kafka_incident_dlq_topic,
+                key=(task_id or message_id).encode("utf-8"),
+                value=json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"),
+            )
+        except Exception:
+            record_kafka("dlq", "failed", level)
+            raise
         dlq_id = self._format_message_id(metadata.topic, metadata.partition, metadata.offset)
         await self.ack(message_id)
+        record_kafka("dlq", "ok", level)
         logger.warning(
             f"[incident-queue] dead-lettered msg={message_id} dlq={dlq_id} reason={reason[:120]}"
         )
@@ -463,6 +522,7 @@ class KafkaIncidentQueue:
                 topic_partitions.get(settings.kafka_incident_dlq_topic, []),
                 TopicPartition,
             )
+            set_kafka_lag(depth_by_level, out["dlq_depth"])
             workers, group_state = await self._describe_workers()
             out["workers"] = workers
             out["alive_workers"] = len(workers)

@@ -9,7 +9,7 @@
   - 全部 read_only=True / concurrency_safe=True, 由 meta.py 集中登记.
 
 未做的事 (留给后续迭代):
-  - HTTP Basic Auth / Bearer Token: 现在只支持开放 Prometheus, 加密 Prom 需要扩 settings
+  - HTTP Basic Auth: Bearer Token 和 Mimir/Cortex tenant 已支持，Basic Auth 尚未单列
   - Pushgateway / Federation / OpenMetrics 写入: 与 read-only 定位不符
   - VictoriaMetrics 自有 API (/api/v1/series 等): 兼容层只覆盖 Prom 标准 API
 """
@@ -23,6 +23,15 @@ from langchain_core.tools import tool
 from loguru import logger
 
 from app.config import settings
+
+
+def _request_headers() -> Dict[str, str]:
+    headers = {"Accept": "application/json"}
+    if settings.prometheus_bearer_token:
+        headers["Authorization"] = f"Bearer {settings.prometheus_bearer_token}"
+    if settings.prometheus_tenant_id:
+        headers["X-Scope-OrgID"] = settings.prometheus_tenant_id
+    return headers
 
 
 # ============================================================
@@ -59,7 +68,11 @@ async def _http_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     base = settings.prometheus_url.rstrip("/")
     url = f"{base}{path}"
     timeout = float(getattr(settings, "prometheus_timeout_sec", 8.0))
-    async with httpx.AsyncClient(timeout=timeout) as cli:
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        verify=bool(settings.prometheus_tls_verify),
+        headers=_request_headers(),
+    ) as cli:
         resp = await cli.get(url, params=params)
         resp.raise_for_status()
         data = resp.json()

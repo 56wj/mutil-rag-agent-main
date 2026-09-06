@@ -541,6 +541,76 @@ class Settings(BaseSettings):
         description="后台 Worker 诊断全局并发上限 (所有 Worker 副本共享). 满了 Worker 等待而不是超跑.",
     )
 
+    # ==================== AgentOps 可观测性 ====================
+    observability_enabled: bool = Field(
+        default=True,
+        description="AgentOps 可观测性总开关；关闭后不采集自监控指标和 Trace Context.",
+    )
+    metrics_enabled: bool = Field(
+        default=True,
+        description="是否在 API /metrics 和 Worker 独立端口暴露 Prometheus 指标.",
+    )
+    metrics_path: str = Field(default="/metrics", description="API Prometheus scrape 路径")
+    worker_metrics_port: int = Field(
+        default=9910,
+        description="Diagnosis Worker 独立 Prometheus 指标端口；<=0 时关闭.",
+    )
+    queue_metrics_refresh_sec: int = Field(
+        default=30,
+        description="API 后台刷新 Kafka lag/DLQ 指标的间隔秒数；<=0 时关闭.",
+    )
+    otel_enabled: bool = Field(
+        default=True,
+        description="是否启用 OpenTelemetry tracing 与 W3C trace context 传播.",
+    )
+    otel_service_name: str = Field(
+        default="multi-agent-aiops",
+        description="OTel service.name 前缀；运行角色会追加 api/worker.",
+    )
+    otel_environment: str = Field(default="local", description="OTel deployment environment")
+    otel_exporter_otlp_endpoint: str = Field(
+        default="",
+        description="OTLP/HTTP Collector 基地址；留空仍传播上下文但不导出 span.",
+    )
+    otel_exporter_otlp_headers: str = Field(
+        default="",
+        description="OTLP 请求头，逗号分隔 key=value；用于托管可观测平台鉴权.",
+    )
+    otel_export_timeout_sec: float = Field(default=5.0, description="OTLP 导出超时秒数")
+    otel_trace_sample_ratio: float = Field(
+        default=1.0,
+        description="父采样优先的 Trace 采样率，范围 0-1.",
+    )
+    otel_excluded_urls: str = Field(
+        default="/metrics,/api/v1/health,/api/v1/health/ready",
+        description="FastAPI tracing 排除路径，逗号分隔正则.",
+    )
+
+    # Langfuse 只承接 LLM / Agent 语义观测和评测。Prometheus 继续承接服务、队列和
+    # Worker 的运行指标，二者职责不同。默认关闭，避免未配置密钥时产生网络请求。
+    langfuse_enabled: bool = Field(
+        default=False,
+        description="是否把 fast/deep Agent、LangGraph、LLM 和 Tool trace 写入 Langfuse.",
+    )
+    langfuse_public_key: str = Field(default="", description="Langfuse project public key")
+    langfuse_secret_key: str = Field(default="", description="Langfuse project secret key")
+    langfuse_base_url: str = Field(
+        default="https://cloud.langfuse.com",
+        description="Langfuse Cloud region 或自托管实例基地址.",
+    )
+    langfuse_environment: str = Field(
+        default="local",
+        description="Langfuse environment 标签，如 local/staging/production.",
+    )
+    langfuse_release: str = Field(
+        default="",
+        description="Agent release/version；留空时使用 APP_VERSION.",
+    )
+    langfuse_sample_rate: float = Field(
+        default=1.0,
+        description="Langfuse Agent trace 采样率，范围 0-1；评测环境应保持 1.0.",
+    )
+
     # ==================== Prometheus / 真指标后端 (可选) ====================
     # 留空 = 未启用, MetricAgent / 任何 Skill 仍可调本机 system 工具兜底.
     # 配上 URL 后 MetricAgent 优先尝试 PromQL, 失败/超时再降级本机.
@@ -551,6 +621,27 @@ class Settings(BaseSettings):
     prometheus_timeout_sec: float = Field(
         default=8.0,
         description="Prometheus HTTP API 超时秒数, 超时即返回错误说明, 不阻塞诊断主链路",
+    )
+    prometheus_bearer_token: str = Field(default="", description="可选 Prometheus/Mimir Bearer Token")
+    prometheus_tenant_id: str = Field(default="", description="可选 Mimir/Cortex X-Scope-OrgID")
+    prometheus_tls_verify: bool = Field(default=True, description="是否校验 Prometheus HTTPS 证书")
+
+    # ==================== Loki / 真日志后端 (可选) ====================
+    loki_url: str = Field(
+        default="",
+        description="Loki HTTP API 基地址；留空时 LogAgent 只使用知识库日志模板.",
+    )
+    loki_timeout_sec: float = Field(default=8.0, description="Loki HTTP API 超时秒数")
+    loki_bearer_token: str = Field(default="", description="可选 Loki Bearer Token")
+    loki_tenant_id: str = Field(default="", description="可选 Loki X-Scope-OrgID 租户 ID")
+    loki_tls_verify: bool = Field(default=True, description="是否校验 Loki HTTPS 证书")
+    loki_max_entries: int = Field(
+        default=200,
+        description="单次 Loki 查询允许返回的最大日志条数，控制上下文和后端负载.",
+    )
+    loki_redact_secrets: bool = Field(
+        default=True,
+        description="返回给 Agent 前遮盖日志中的 Bearer/JWT/password/token/api_key/secret.",
     )
 
     # ==================== 联网搜索 ====================
@@ -680,6 +771,19 @@ class Settings(BaseSettings):
         if value not in {"PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"}:
             raise ValueError("kafka_security_protocol 配置无效")
         return value
+
+    @field_validator("metrics_path")
+    @classmethod
+    def _normalize_metrics_path(cls, v: str) -> str:
+        value = (v or "/metrics").strip()
+        return value if value.startswith("/") else f"/{value}"
+
+    @field_validator("otel_trace_sample_ratio", "langfuse_sample_rate")
+    @classmethod
+    def _validate_trace_sample_ratio(cls, v: float) -> float:
+        if not 0.0 <= float(v) <= 1.0:
+            raise ValueError("trace sample ratio 必须在 0 到 1 之间")
+        return float(v)
 
     def validate_runtime(self) -> None:
         """运行时校验 (启动时调用).

@@ -34,8 +34,8 @@ class FakeProducer:
     def __init__(self):
         self.calls = []
 
-    async def send_and_wait(self, topic, *, key, value):
-        self.calls.append({"topic": topic, "key": key, "value": value})
+    async def send_and_wait(self, topic, *, key, value, headers=None):
+        self.calls.append({"topic": topic, "key": key, "value": value, "headers": headers or []})
         return SimpleNamespace(topic=topic, partition=2, offset=41)
 
 
@@ -96,6 +96,10 @@ class KafkaQueueTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(settings, "kafka_incident_topic", "incident.tasks"),
             patch.object(settings, "incident_queue_priority_enabled", True),
+            patch(
+                "app.queue.kafka.inject_trace_context",
+                return_value={"traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"},
+            ),
         ):
             message_id = await queue.enqueue_task(
                 task_id="task-1",
@@ -113,6 +117,8 @@ class KafkaQueueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value["schema_version"], 1)
         self.assertEqual(value["task_id"], "task-1")
         self.assertEqual(value["payload"]["query"], "cpu high")
+        self.assertEqual(value["trace_context"]["traceparent"][:3], "00-")
+        self.assertEqual(sent["headers"][0][0], "traceparent")
 
     async def test_read_checks_high_priority_before_normal(self):
         queue = KafkaIncidentQueue()
@@ -128,6 +134,12 @@ class KafkaQueueTests(unittest.IsolatedAsyncioTestCase):
             partition=0,
             offset=7,
             value=json.dumps({"task_id": "task-normal", "payload": {}}).encode(),
+            headers=[
+                (
+                    "traceparent",
+                    b"00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+                )
+            ],
         )
         queue._consumers = {
             topics[0]: FakeConsumer([{}]),
@@ -145,6 +157,7 @@ class KafkaQueueTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(tasks[0][0], "incident.tasks.normal:0:7")
         self.assertEqual(tasks[0][1]["task_id"], "task-normal")
+        self.assertIn("traceparent", tasks[0][1]["trace_context"])
 
     async def test_ack_commits_next_offset(self):
         queue = KafkaIncidentQueue()

@@ -15,16 +15,71 @@
   每一层都可通过 settings 开关; 任一环节失败都自动降级到上一层结果.
 """
 
+from copy import deepcopy
 from functools import lru_cache
 from typing import Any, List, Optional
 
 from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
 from langchain_milvus import Milvus
 from loguru import logger
 from pymilvus import MilvusClient, connections
 
 from app.config import settings
 from app.core.embedding import get_embeddings
+
+
+# 生产与评测共用同一份索引/搜索参数，避免 benchmark 复制后悄悄漂移。
+MILVUS_INDEX_PARAMS = {
+    "metric_type": "COSINE",
+    "index_type": "HNSW",
+    "params": {"M": 8, "efConstruction": 64},
+}
+
+
+def milvus_search_params() -> dict[str, Any]:
+    return {
+        "metric_type": "COSINE",
+        "params": {"ef": max(32, int(settings.milvus_hnsw_search_ef or 128))},
+    }
+
+
+def create_vector_store(
+    collection_name: str,
+    *,
+    drop_old: bool = False,
+    embedding_function: Embeddings | None = None,
+) -> Milvus:
+    """用生产同款 embedding/index/search 参数创建指定 collection 的 VectorStore。
+
+    生产仍通过 :func:`get_vector_store` 使用固定 collection；Parent/Child 评测传入
+    隔离 collection 名。调用方负责确保 ``drop_old`` 只用于评测 collection。
+    """
+    if not collection_name or not collection_name.strip():
+        raise ValueError("collection_name 不能为空")
+
+    uri = f"http://{settings.milvus_host}:{settings.milvus_port}"
+    probe_client = MilvusClient(uri=uri)
+    internal_alias = probe_client._using
+    if internal_alias not in [c[0] for c in connections.list_connections()]:
+        connections.connect(alias=internal_alias, uri=uri)
+
+    logger.info(
+        f"创建 VectorStore: collection={collection_name}, "
+        f"uri={uri}, alias={internal_alias}, drop_old={drop_old}"
+    )
+    return Milvus(
+        embedding_function=embedding_function or get_embeddings(),
+        collection_name=collection_name,
+        connection_args={"uri": uri},
+        primary_field="pk",
+        text_field="content",
+        vector_field="vector",
+        index_params=deepcopy(MILVUS_INDEX_PARAMS),
+        search_params=milvus_search_params(),
+        auto_id=True,
+        drop_old=drop_old,
+    )
 
 
 @lru_cache(maxsize=1)
@@ -42,44 +97,7 @@ def get_vector_store() -> Milvus:
           把同一个 alias 注册到 ORM registry, 让两套 API 共享连接.
         - 必须用 uri 而非 host+port (MilvusClient 的强制要求)
     """
-    uri = f"http://{settings.milvus_host}:{settings.milvus_port}"
-
-    # 先创建 MilvusClient, 拿到内部 alias (形如 "cm-xxxxxx")
-    probe_client = MilvusClient(uri=uri)
-    internal_alias = probe_client._using
-
-    # 把同一 alias 注册到 ORM connections registry
-    # (pymilvus.orm.Collection 会从这里查 connection)
-    if internal_alias not in [c[0] for c in connections.list_connections()]:
-        connections.connect(alias=internal_alias, uri=uri)
-
-    logger.info(
-        f"创建 VectorStore: collection={settings.milvus_collection}, "
-        f"uri={uri}, alias={internal_alias}"
-    )
-
-    return Milvus(
-        embedding_function=get_embeddings(),
-        collection_name=settings.milvus_collection,
-        connection_args={"uri": uri},
-        # 字段名约定 (与原 OnCall 项目保持一致, 方便迁移数据)
-        primary_field="pk",
-        text_field="content",
-        vector_field="vector",
-        # 索引参数: HNSW + COSINE (本地 Milvus standalone 优先稳定)。
-        index_params={
-            "metric_type": "COSINE",
-            "index_type": "HNSW",
-            "params": {"M": 8, "efConstruction": 64},
-        },
-        search_params={
-            "metric_type": "COSINE",
-            "params": {"ef": max(32, int(settings.milvus_hnsw_search_ef or 128))},
-        },
-        # 不存在则自动建表 (开发期友好)
-        auto_id=True,
-        drop_old=False,  # 不删旧数据
-    )
+    return create_vector_store(settings.milvus_collection, drop_old=False)
 
 
 def safe_similarity_search(

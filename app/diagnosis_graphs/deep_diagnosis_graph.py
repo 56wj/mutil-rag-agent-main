@@ -101,6 +101,39 @@ def _stub_evidence(source: EvidenceSource, etype: str, summary: str) -> dict[str
     }
 
 
+_ALERT_SUMMARY_LIMIT = 1200
+
+
+def _alert_payload_evidence(
+    state: DeepDiagnosisState,
+    *,
+    provenance: str,
+) -> dict[str, Any] | None:
+    """把诊断入口文本变成 Deep 图可消费的一等 Evidence。
+
+    告警正文属于“上游报告事实”，可信度低于现场重新查询到的 metric/log，
+    但高于完全没有证据。此前它只作为 state.input 给专业 Agent 看，未进入
+    EvidenceReducer/RCAJudge，导致合成评测或遥测暂时缺失时把入口中的明确事实丢掉。
+    """
+    text = str(state.get("input") or "").strip()
+    if not text:
+        return None
+    task_id = str(state.get("task_id") or "")
+    return {
+        "source": str(EvidenceSource.ALERT),
+        "type": "alert_payload",
+        "summary": f"原始告警输入: {text}"[:_ALERT_SUMMARY_LIMIT],
+        "content": {"query": text},
+        "score": None,
+        "metadata": {
+            "agent": "incident_manager",
+            "provenance": provenance,
+            "task_id": task_id,
+            "trust_level": "reported",
+        },
+    }
+
+
 # ============================================================
 # ① IncidentManager —— 真节点 (M7 主线 1·步 6)
 # ============================================================
@@ -108,18 +141,26 @@ async def incident_manager_node(state: DeepDiagnosisState) -> DeepDiagnosisState
     """载入诊断对象 + 初始化 state。
 
     - worker 路径: state.task_id / incident_group_id / incident_id 都有 → 回查 DB 充实上下文;
-    - 手动 SSE 路径: 这些字段为空, 跳过 DB 查 (无 task 事实行可查), 仅记 transition;
+    - 手动 SSE 路径: 这些字段为空, 跳过 DB 查，并把入口文本转成 alert Evidence;
     - DB 异常: 降级, 不抛, 仅记 transition 详情。
     """
     task_id = state.get("task_id") or ""
     incident_group_id = state.get("incident_group_id") or ""
+    alert_evidence = _alert_payload_evidence(
+        state,
+        provenance="incident_task" if task_id else "manual_input",
+    )
+    initial_evidences = [alert_evidence] if alert_evidence is not None else []
 
     if not task_id:
-        # 手动诊断路径: 无 task 元信息, 直接放行 (不写 evidence, 让后续节点用 state.input)
+        # 手动诊断路径也保留入口告警为结构化 Evidence，供 Reducer/Judge 使用。
         logger.info("[deep] IncidentManager: no task_id (manual SSE path)")
         return {
+            "evidences": initial_evidences,
             "transition_history": [make_transition(
-                "incident_manager", DEEP_INCIDENT_LOADED, "no task_id (manual path)",
+                "incident_manager",
+                DEEP_INCIDENT_LOADED,
+                f"no task_id (manual path); alert_evidence={len(initial_evidences)}",
             )],
         }
 
@@ -132,6 +173,7 @@ async def incident_manager_node(state: DeepDiagnosisState) -> DeepDiagnosisState
         if task is None:
             logger.warning(f"[deep] IncidentManager: task {task_id} not found in DB")
             return {
+                "evidences": initial_evidences,
                 "transition_history": [make_transition(
                     "incident_manager", DEEP_INCIDENT_LOADED, f"task {task_id} not found",
                 )],
@@ -139,9 +181,12 @@ async def incident_manager_node(state: DeepDiagnosisState) -> DeepDiagnosisState
         # 充实上下文: 把 DB task 关键字段透传 (alert_signature 已在 runner 里算好, 这里不重算)
         payload = task.get("payload") or {}
         patch: Dict[str, Any] = {
+            "evidences": initial_evidences,
             "transition_history": [make_transition(
                 "incident_manager", DEEP_INCIDENT_LOADED,
-                f"{detail} alertname={payload.get('alertname', '-')} severity={payload.get('severity', '-')}",
+                f"{detail} alertname={payload.get('alertname', '-')} "
+                f"severity={payload.get('severity', '-')} "
+                f"alert_evidence={len(initial_evidences)}",
             )],
         }
         # 如 state 没填 incident_group_id, 从 task 补上 (worker 路径已填; 双保险)
@@ -154,6 +199,7 @@ async def incident_manager_node(state: DeepDiagnosisState) -> DeepDiagnosisState
         # DB 故障降级: 不抛, deep graph 继续走
         logger.exception(f"[deep] IncidentManager DB 查询失败: {exc}")
         return {
+            "evidences": initial_evidences,
             "transition_history": [make_transition(
                 "incident_manager", DEEP_INCIDENT_LOADED,
                 f"{detail} db_error: {type(exc).__name__}",
@@ -177,10 +223,12 @@ async def correlation_context_node(state: DeepDiagnosisState) -> DeepDiagnosisSt
     try:
         from app.wiki.store import recall_block
 
-        _block = await recall_block(
-            query=str(state.get("input") or ""),
-            signature=str(state.get("alert_signature") or ""),
-        )
+        _block = ""
+        if state.get("experience_recall_enabled", True):
+            _block = await recall_block(
+                query=str(state.get("input") or ""),
+                signature=str(state.get("alert_signature") or ""),
+            )
         if _block:
             lessons_evs.append({
                 "source": str(EvidenceSource.INCIDENT_HISTORY),
@@ -394,6 +442,8 @@ _EVIDENCE_BASE_SCORE: dict[str, float] = {
     "infra_snapshot": 0.90,
     "log_excerpt": 0.85,
     "runbook_match": 0.75,
+    # 上游告警可包含 exporter 采样值/日志摘要，但尚未由本轮工具复核。
+    "alert_payload": 0.70,
     "incident_history": 0.60,
     # 兜底: 未见过的 type 给中等分, 不丢
     "_default": 0.50,

@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Mapping
 
 from loguru import logger
 
@@ -18,6 +18,13 @@ from app.runtime.stream_sink import set_sink
 from app.incidents.models import DiagnosisMode
 from app.wiki.store import ingest_diagnosis
 from app.runtime.agent_harness import HarnessUsageStats, get_agent_harness
+from app.observability.metrics import diagnosis_finished, diagnosis_started
+from app.observability.tracing import mark_span_error, start_span
+from app.observability.langfuse_client import (
+    make_langfuse_callback,
+    start_diagnosis_observation,
+    update_observation,
+)
 # chat_memory 在 _cache_report 内 lazy import,避免 services -> orchestration -> services 循环。
 
 RuntimeEvent = dict[str, Any]
@@ -104,6 +111,9 @@ async def run_diagnosis_graph(
     diagnosis_mode: str | DiagnosisMode = DiagnosisMode.FAST,
     cache_reports: bool = False,
     alert_signature: str = "",
+    trace_metadata: Mapping[str, Any] | None = None,
+    experience_recall_enabled: bool = True,
+    persist_experience: bool = True,
 ) -> AsyncIterator[RuntimeEvent]:
     """跑 fast 或 deep LangGraph 诊断图, 产 SSE 事件流。
 
@@ -118,6 +128,12 @@ async def run_diagnosis_graph(
             the structured alert payload. Threaded into the graph state so the
             LLM Wiki recall_block can do direct-page lookup
             (services/<service>.md, patterns/<sig>.md). Manual/SSE callers leave it empty.
+        trace_metadata: Optional low-cardinality experiment metadata, e.g. dataset/case/run.
+            It is sent to Langfuse only and never changes graph behavior.
+        experience_recall_enabled: Whether the graph may read the mutable diagnosis Wiki.
+            Benchmarks disable this so an earlier fast run cannot leak its answer into deep.
+        persist_experience: Whether to write the final report back to Wiki. Benchmarks disable
+            this to keep repeated runs independent.
     """
     requested_mode, effective_mode, group_agent_reserved = resolve_effective_mode(
         diagnosis_mode
@@ -168,25 +184,93 @@ async def run_diagnosis_graph(
     set_sink(token_queue)
     done_sentinel: RuntimeEvent = {"__done__": True}
 
-    graph_config: dict[str, Any] = {"recursion_limit": harness.graph_recursion_limit()}
+    graph_config: dict[str, Any] = {
+        "recursion_limit": harness.graph_recursion_limit(),
+        "run_name": f"aiops-{effective_mode.value}-diagnosis",
+        "tags": ["aiops", "diagnosis", effective_mode.value],
+        "metadata": {
+            "langfuse_session_id": session_id,
+            "langfuse_tags": ["aiops", "diagnosis", effective_mode.value],
+            "diagnosis_mode": effective_mode.value,
+            **dict(trace_metadata or {}),
+        },
+    }
+    langfuse_callback = make_langfuse_callback()
+    if langfuse_callback is not None:
+        graph_config["callbacks"] = [langfuse_callback]
     graph_input: dict[str, Any] = {
         "input": query,
         "diagnosis_mode": effective_mode.value,
         "requested_diagnosis_mode": requested_mode.value,
         "alert_signature": alert_signature,
+        "experience_recall_enabled": experience_recall_enabled,
     }
     final_report = ""  # 经验 Wiki 写钩子用: 捕获本次诊断产出的最终报告文本
+    run_status = "cancelled"
+    langfuse_trace_id = ""
+    diagnosis_started(effective_mode.value)
 
     async def _graph_runner() -> None:
-        try:
-            async for event in graph.astream(graph_input, config=graph_config):
-                await token_queue.put({"__node__": event})
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            await token_queue.put({"__error__": exc})
-        finally:
-            await token_queue.put(done_sentinel)
+        nonlocal langfuse_trace_id
+        trace_report = ""
+        trace_t0 = time.perf_counter()
+        with start_diagnosis_observation(
+            query=query,
+            session_id=session_id,
+            requested_mode=requested_mode.value,
+            effective_mode=effective_mode.value,
+            metadata=trace_metadata,
+        ) as langfuse_observation:
+            if langfuse_observation is not None:
+                langfuse_trace_id = str(getattr(langfuse_observation, "trace_id", "") or "")
+            with start_span(
+                "aiops.diagnosis.graph",
+                attributes={
+                    "gen_ai.operation.name": "invoke_agent",
+                    "gen_ai.agent.name": f"aiops-{effective_mode.value}",
+                    "aiops.diagnosis.mode": effective_mode.value,
+                    "aiops.diagnosis.requested_mode": requested_mode.value,
+                    "aiops.session.id": session_id,
+                },
+            ) as span:
+                try:
+                    async for event in graph.astream(graph_input, config=graph_config):
+                        report = _report_from_graph_event(event)
+                        if report:
+                            trace_report = report
+                        await token_queue.put({"__node__": event})
+                    if span is not None:
+                        span.set_attribute("aiops.diagnosis.status", "succeeded")
+                    update_observation(
+                        langfuse_observation,
+                        output={"report": trace_report, "mode": effective_mode.value},
+                        status="succeeded",
+                        elapsed_ms=int((time.perf_counter() - trace_t0) * 1000),
+                    )
+                except asyncio.CancelledError:
+                    if span is not None:
+                        span.set_attribute("aiops.diagnosis.status", "cancelled")
+                    update_observation(
+                        langfuse_observation,
+                        output={"report": trace_report, "mode": effective_mode.value},
+                        status="cancelled",
+                        elapsed_ms=int((time.perf_counter() - trace_t0) * 1000),
+                    )
+                    raise
+                except Exception as exc:
+                    mark_span_error(span, exc)
+                    if span is not None:
+                        span.set_attribute("aiops.diagnosis.status", "failed")
+                    update_observation(
+                        langfuse_observation,
+                        output={"report": trace_report, "mode": effective_mode.value},
+                        status="failed",
+                        elapsed_ms=int((time.perf_counter() - trace_t0) * 1000),
+                        error=exc,
+                    )
+                    await token_queue.put({"__error__": exc})
+                finally:
+                    await token_queue.put(done_sentinel)
 
     runner_task = asyncio.create_task(_graph_runner())
 
@@ -197,6 +281,7 @@ async def run_diagnosis_graph(
                 break
             if "__error__" in item:
                 exc = item["__error__"]
+                run_status = "failed"
                 logger.exception(
                     f"[DiagnosisRunner] session={session_id} | 诊断异常: {exc}"
                 )
@@ -267,11 +352,17 @@ async def run_diagnosis_graph(
             message=stats_event.get("detail", ""),
             **(stats_event.get("data") or {}),
         )
-        yield make_event("complete", "diagnosis_complete", message="诊断流程完成")
+        run_status = "succeeded"
+        yield make_event(
+            "complete",
+            "diagnosis_complete",
+            message="诊断流程完成",
+            langfuse_trace_id=langfuse_trace_id,
+        )
 
         # LLM Wiki 写钩子: 诊断产出报告后 ingest 进 wiki (LLM 合并相关页, best-effort 自吞异常)。
         # 这是 fast/deep/worker 三条路径的单一汇聚点。
-        if final_report:
+        if final_report and persist_experience:
             await ingest_diagnosis(
                 query=query,
                 report_text=final_report,
@@ -281,10 +372,12 @@ async def run_diagnosis_graph(
             )
 
     except asyncio.CancelledError:
+        run_status = "cancelled"
         logger.info(f"[DiagnosisRunner] session={session_id} | 运行取消")
         runner_task.cancel()
         raise
     except Exception as exc:
+        run_status = "failed"
         logger.exception(f"[DiagnosisRunner] session={session_id} | 诊断异常: {exc}")
         yield make_event(
             "error",
@@ -293,12 +386,29 @@ async def run_diagnosis_graph(
             error_type=type(exc).__name__,
         )
     finally:
+        diagnosis_finished(
+            effective_mode.value,
+            run_status,
+            time.perf_counter() - total_t0,
+        )
         if not runner_task.done():
             runner_task.cancel()
             try:
                 await runner_task
             except (asyncio.CancelledError, Exception):
                 pass
+
+
+def _report_from_graph_event(event: Mapping[str, Any]) -> str:
+    """从 fast/deep 节点事件中取出最终报告，供 Langfuse 根 observation 写 output。"""
+    for node_name, raw_output in event.items():
+        if node_name not in {"replanner", "fork_skill", "report", "skill_router"}:
+            continue
+        node_output = raw_output if isinstance(raw_output, Mapping) else {}
+        response = node_output.get("response")
+        if isinstance(response, str) and response.strip():
+            return response
+    return ""
 
 
 async def _cache_report(session_id: str, event: RuntimeEvent) -> None:
@@ -400,6 +510,21 @@ async def _convert_node_event(
     # remediation_planner/report), 故可在同一函数里分发, 不影响 fast 行为。
     # 大量事件已由 transition_history -> "transition" SSE 自动产生; 这里只补
     # "需要前端拿到结构化 payload"的关键事件。
+    elif node_name == "incident_manager":
+        # Deep 图把入口告警建模为一等 Evidence。显式发出事件，让 SSE、benchmark
+        # 和审计消费者看到同一条 provenance，而不是只在最终报告里间接出现。
+        new_evs = node_output.get("evidences", []) or []
+        for ev in new_evs:
+            yield make_event(
+                "evidence",
+                "incident_input_evidence",
+                message=str(ev.get("summary") or "")[:200],
+                agent="incident_manager",
+                source=str(ev.get("source", "")),
+                evidence_type=str(ev.get("type", "")),
+                evidence=ev,
+            )
+
     elif node_name == "evidence_plan":
         plan = node_output.get("evidence_plan", {}) or {}
         agents = plan.get("agents", []) or []
@@ -423,6 +548,7 @@ async def _convert_node_event(
                 agent=node_name,
                 source=str(ev.get("source", "")),
                 evidence_type=str(ev.get("type", "")),
+                evidence=ev,
             )
 
     elif node_name == "evidence_reducer":

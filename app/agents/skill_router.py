@@ -111,9 +111,11 @@ async def skill_router_node(state: PlanExecuteState) -> PlanExecuteState:
     router_model = harness.router_model()
     llm = get_chat_llm(model=router_model, temperature=0, timeout=30, max_retries=1)
     # 经验回灌: 从 LLM Wiki 召回相关页注入 router prompt (read-index-first, best-effort)。
-    lessons = await recall_block(
-        query=user_input, signature=str(state.get("alert_signature") or ""),
-    )
+    lessons = ""
+    if state.get("experience_recall_enabled", True):
+        lessons = await recall_block(
+            query=user_input, signature=str(state.get("alert_signature") or ""),
+        )
     # 回灌可观测性: 命中时记一条 transition, 让"用没用回灌、注入了几页"进结构化事件流
     # (diagnosis_runner 会把 transition_history 转成 transition 事件)。无命中则 None。
     recall_count = sum(1 for ln in lessons.splitlines() if ln.startswith("### ")) if lessons else 0

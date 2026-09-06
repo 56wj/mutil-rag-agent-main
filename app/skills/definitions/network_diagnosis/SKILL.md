@@ -20,6 +20,12 @@ triggers:
   - 防火墙
   - 网速
 allowed_tools:
+  - prom_query
+  - prom_query_range
+  - prom_active_alerts
+  - prom_label_values
+  - loki_query_range
+  - loki_label_values
   - search_knowledge_base
   - get_current_time
   - ping_host

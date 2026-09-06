@@ -18,6 +18,8 @@
 - **统一工具接入**：系统、网络、Docker、Web Search、Windows 日志等能力通过 MCP 服务暴露。
 - **后台任务系统**：Kafka 多 topic 提供优先级队列，独立 Worker 执行长耗时诊断。
 - **事实与审计**：Postgres 保存告警、事件组、任务、AgentRun、ToolCall、Evidence 和报告。
+- **真实观测取证**：MetricAgent 查询 Prometheus，LogAgent 查询 Loki 原始日志并与 RAG 模板交叉验证。
+- **Agent 评测闭环**：Langfuse 记录 fast/deep 的 LangGraph、LLM 与 Tool Trace；固定故障集对比 RCA、证据召回、时延和 Token 成本。
 - **并发保护**：支持接口限流、分布式执行槽、Worker 心跳、Kafka rebalance、重试和死信队列。
 - **经验沉淀**：诊断结果可整理为 Markdown Wiki，并在后续诊断中重新召回。
 - **评测与压测**：包含检索评测、RAGAS / OpenEvals 数据集以及队列和接口压测脚本。
@@ -44,7 +46,13 @@ flowchart TD
     DEEP --> RAG
     FAST --> MCP[MCP Tools]
     DEEP --> MCP
+    FAST --> PROM[Prometheus Metrics]
+    DEEP --> LOKI[Loki Logs]
     RUNNER --> EVIDENCE[(Evidence / ToolCall / Report)]
+    API -. traceparent .-> QUEUE
+    API -. /metrics .-> OBS[Prometheus / Grafana]
+    RUNNER -. Agent / LLM / Tool Trace .-> LF[Langfuse]
+    RUNNER -. Infra spans .-> TEMPO[OTel Collector / Tempo]
     API --> UI[Web UI]
 ```
 
@@ -81,10 +89,10 @@ IncidentManager
 
 | Skill | 场景 | 主要工具范围 |
 |---|---|---|
-| `host_resource_diagnosis` | CPU、内存、磁盘、OOM、主机卡顿 | 系统快照、进程、磁盘、知识库 |
+| `host_resource_diagnosis` | CPU、内存、磁盘、OOM、主机卡顿 | Prometheus、Loki、系统快照、知识库 |
 | `network_diagnosis` | DNS、HTTP、端口、连通性异常 | DNS、HTTP、端口、Ping、Web Search |
-| `container_diagnosis` | 容器退出、重启循环、资源异常 | Docker 状态、日志、inspect |
-| `generic_oncall` | 现象不明确或多组件复合故障 | 通用只读工具集合 |
+| `container_diagnosis` | 容器退出、重启循环、资源异常 | Prometheus、Loki、Docker 状态、inspect |
+| `generic_oncall` | 现象不明确或多组件复合故障 | Prometheus、Loki 与通用只读工具集合 |
 
 ## 技术栈
 
@@ -97,6 +105,7 @@ IncidentManager
 | 任务队列 | Apache Kafka |
 | 事实库 | PostgreSQL |
 | 工具协议 | MCP |
+| 可观测性与评测 | Langfuse、Prometheus、Grafana、Loki、OpenTelemetry |
 | 部署 | Docker Compose、Shell、PowerShell |
 
 ## 快速开始
@@ -156,7 +165,7 @@ docker compose --profile app up -d --build
 docker compose ps
 ```
 
-该方式会启动 API、3 个 Worker、MCP 服务、Milvus、Kafka、Redis、Postgres 和本地 Web Search 服务。Redis 继续用于会话记忆和分布式限流槽，不再承载诊断消息队列。
+该方式会启动 API、3 个 Worker、MCP 服务、Milvus、Kafka、Redis、Postgres、本地 Web Search，以及 Prometheus / Grafana / Loki / Tempo / OTel Collector / Alloy。Redis 继续用于会话记忆和分布式限流槽，不再承载诊断消息队列。
 
 查看日志或停止服务：
 
@@ -222,7 +231,18 @@ python scripts/ingest_kb_corpus.py --reset
 | 健康检查 | <http://localhost:9900/api/v1/health> |
 | 就绪检查 | <http://localhost:9900/api/v1/health/ready> |
 | 队列状态 | <http://localhost:9900/api/v1/queue/status> |
+| Prometheus Metrics | <http://localhost:9900/metrics> |
+| Prometheus UI | <http://localhost:9090> |
+| Grafana AgentOps 看板 | <http://localhost:3000/d/multi-agent-aiops-agentops> |
+| Tempo | <http://localhost:3200> |
 | Attu | <http://localhost:8000> |
+
+Grafana 本地默认账号为 `admin/admin`，应在共享或生产环境中通过
+`GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` 替换。完整指标、Trace 传播、
+LogQL 示例和告警语义见 [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md)。
+
+启用 Langfuse 后，每次 fast/deep 诊断会记录 Agent 根节点、LangGraph chain、LLM
+generation 与 Tool 子节点。固定集对比命令见 [`benchmark/README.md`](benchmark/README.md)。
 
 ## API 概览
 
@@ -308,6 +328,7 @@ Markdown / SOP / Alert Corpus
 ├── benchmark/              # 评测集、评测脚本和报告
 ├── data/kb_corpus/         # 知识库语料
 ├── data/wiki/              # Wiki 约定与运行时目录
+├── deploy/observability/   # Prometheus/Loki/Tempo/Alloy/Grafana 配置与看板
 ├── docs/                   # SOP、并发测试与压测文档
 ├── frontend/               # Web UI
 ├── mcp_servers/            # MCP 工具服务
@@ -328,6 +349,7 @@ Markdown / SOP / Alert Corpus
 - 存储：`MILVUS_*`、`REDIS_URL`、`DATABASE_URL`
 - RAG：`RAG_*`
 - 队列与 Worker：`KAFKA_*`、`DIAGNOSIS_TASK_*`、`*_DIAGNOSIS_CONCURRENCY`
+- 可观测性：`LANGFUSE_*`、`OBSERVABILITY_*`、`METRICS_*`、`OTEL_*`、`PROMETHEUS_*`、`LOKI_*`
 - MCP：`MCP_*_URL`
 - 权限控制：`PERMISSION_MODE`、`GUARDRAILS_BLOCK_HIGH_RISK_TOOLS`
 - 日志：`LOG_LEVEL`、`LOG_DIR`、`LOG_RETENTION_DAYS`

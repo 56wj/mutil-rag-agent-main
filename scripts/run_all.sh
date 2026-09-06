@@ -63,7 +63,10 @@ echo "[run_all]   API pid=$(cat .run/api.pid) -> logs/api.log"
 # 4) N 个 Worker
 for i in $(seq 1 "$WORKERS"); do
   name="worker-$i"
-  PYTHON="$PYTHON" nohup bash scripts/run_worker.sh "$name" > "logs/$name.log" 2>&1 &
+  # Worker 是独立进程，本地模式必须使用不同 metrics 端口；Docker 内部各自网络空间可共用 9910。
+  metrics_port=$((9910 + i - 1))
+  WORKER_METRICS_PORT="$metrics_port" PYTHON="$PYTHON" \
+    nohup bash scripts/run_worker.sh "$name" > "logs/$name.log" 2>&1 &
   echo $! > ".run/$name.pid"
   echo "[run_all]   $name pid=$(cat ".run/$name.pid") -> logs/$name.log"
 done
@@ -73,6 +76,7 @@ echo "[run_all] 全部启动完成。"
 echo "  API:        http://localhost:$APP_PORT  (前端同端口)"
 echo "  MCP:        http://localhost:8005/8006/8008/8009/8011/mcp"
 echo "  队列/槽位:   curl http://localhost:$APP_PORT/api/v1/queue/status"
+echo "  Metrics:    http://localhost:$APP_PORT/metrics (Worker: 9910-$((9910 + WORKERS - 1)))"
 echo "  看日志:      tail -f logs/api.log logs/worker-1.log"
 echo "  压测:        $PYTHON scripts/loadtest.py submit --n 100 --concurrency 20"
 echo "  停止:        scripts/stop_all.sh"

@@ -30,6 +30,8 @@ from loguru import logger
 
 from app.runtime.stream_sink import emit as emit_stream
 from app.tools.meta import get_meta
+from app.observability.metrics import record_llm_call, record_tool_call
+from app.observability.tracing import mark_span_error, start_span
 
 
 # ============================================================
@@ -132,14 +134,27 @@ async def _safe_invoke_tool(
     name = tool_call["name"]
     meta = get_meta(name)
     started = time.perf_counter()
+    status = "ok"
 
-    try:
-        content = await _invoke_tool(tool, tool_call["args"])
-    except Exception as exc:
-        logger.warning(f"[ParallelAgent] tool {name!r} 执行失败: {type(exc).__name__}: {exc}")
-        content = f"[执行失败: {type(exc).__name__}: {exc}]"
+    with start_span(
+        "agent.tool.call",
+        kind="client",
+        attributes={
+            "gen_ai.tool.name": name,
+            "aiops.tool.read_only": bool(meta.read_only),
+            "aiops.tool.concurrency_safe": bool(meta.concurrency_safe),
+        },
+    ) as span:
+        try:
+            content = await _invoke_tool(tool, tool_call["args"])
+        except Exception as exc:
+            status = "failed"
+            mark_span_error(span, exc)
+            logger.warning(f"[ParallelAgent] tool {name!r} 执行失败: {type(exc).__name__}: {exc}")
+            content = f"[执行失败: {type(exc).__name__}: {exc}]"
 
     elapsed_ms = (time.perf_counter() - started) * 1000
+    record_tool_call(name, status, elapsed_ms / 1000.0)
 
     # 结果截断 (cc-haha maxResultSizeChars 同款)
     if meta.max_result_chars and len(content) > meta.max_result_chars:
@@ -164,7 +179,7 @@ async def _safe_invoke_tool(
         "elapsed_ms": int(elapsed_ms),
         "read_only": bool(meta.read_only),
         "result_chars": len(content),
-        "status": "failed" if content.startswith("[执行失败") else "ok",
+        "status": status,
     })
 
     return ToolMessage(content=content, tool_call_id=tool_call["id"], name=name)
@@ -272,20 +287,46 @@ async def run_parallel_agent(
         # 让前端在等待期间看到模型正在生成. 工具调用的 tool_calls 也会在
         # accumulated chunk 的最后一帧给出, 和 ainvoke 等价.
         acc: Optional[AIMessage] = None
-        try:
-            async for chunk in bound_llm.astream(messages):
-                acc = chunk if acc is None else (acc + chunk)  # type: ignore[operator]
-                text = getattr(chunk, "content", "")
-                if isinstance(text, list):
-                    text = "".join(
-                        c.get("text", "") if isinstance(c, dict) else str(c)
-                        for c in text
-                    )
-                if text:
-                    await emit_stream({"type": "step_token", "content": text})
-        except Exception:
-            # 流式失败, 回退到一次性 ainvoke (保底, 比如 DeepSeek thinking mode 要回传 reasoning_content)
-            acc = await bound_llm.ainvoke(messages)
+        llm_started = time.perf_counter()
+        llm_model_hint = str(
+            getattr(llm, "model_name", "")
+            or getattr(llm, "model", "")
+            or "unknown"
+        )
+        with start_span(
+            "agent.llm.round",
+            kind="client",
+            attributes={
+                "gen_ai.request.model": llm_model_hint,
+                "aiops.agent.round": round_idx + 1,
+                "aiops.agent.tool_count": len(tools),
+            },
+        ) as span:
+            try:
+                try:
+                    async for chunk in bound_llm.astream(messages):
+                        acc = chunk if acc is None else (acc + chunk)  # type: ignore[operator]
+                        text = getattr(chunk, "content", "")
+                        if isinstance(text, list):
+                            text = "".join(
+                                c.get("text", "") if isinstance(c, dict) else str(c)
+                                for c in text
+                            )
+                        if text:
+                            await emit_stream({"type": "step_token", "content": text})
+                except Exception:
+                    # 流式失败, 回退到一次性 ainvoke (保底, 比如 DeepSeek thinking mode 要回传 reasoning_content)
+                    if span is not None:
+                        span.set_attribute("aiops.llm.stream_fallback", True)
+                    acc = await bound_llm.ainvoke(messages)
+            except Exception as exc:
+                mark_span_error(span, exc)
+                record_llm_call(
+                    llm_model_hint,
+                    "failed",
+                    time.perf_counter() - llm_started,
+                )
+                raise
 
         ai_msg = acc if isinstance(acc, AIMessage) else AIMessage(
             content=getattr(acc, "content", str(acc))
@@ -298,12 +339,24 @@ async def run_parallel_agent(
         resp_meta = getattr(ai_msg, "response_metadata", None) or {}
         # DeepSeek 的 prompt_cache_hit_tokens / prompt_cache_miss_tokens 在 raw token_usage 里
         raw_usage = (resp_meta.get("token_usage") if isinstance(resp_meta, dict) else None) or {}
+        input_token_count = int(usage_meta.get("input_tokens") or raw_usage.get("prompt_tokens") or 0)
+        output_token_count = int(usage_meta.get("output_tokens") or raw_usage.get("completion_tokens") or 0)
+        reported_model = (
+            resp_meta.get("model_name") if isinstance(resp_meta, dict) else None
+        ) or llm_model_hint
+        record_llm_call(
+            str(reported_model),
+            "ok",
+            time.perf_counter() - llm_started,
+            input_tokens=input_token_count,
+            output_tokens=output_token_count,
+        )
         if usage_meta or raw_usage:
             payload = {
                 "type": "usage",
                 "round": round_idx + 1,
-                "input_tokens": int(usage_meta.get("input_tokens") or raw_usage.get("prompt_tokens") or 0),
-                "output_tokens": int(usage_meta.get("output_tokens") or raw_usage.get("completion_tokens") or 0),
+                "input_tokens": input_token_count,
+                "output_tokens": output_token_count,
                 "total_tokens": int(usage_meta.get("total_tokens") or raw_usage.get("total_tokens") or 0),
             }
             # DeepSeek 缓存命中字段, 没有就置 0

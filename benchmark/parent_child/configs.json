@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "unit": "characters",
+  "description": "运维知识库 Parent/Child coarse sweep；7 组成对配置，所有 overlap 固定为 0。",
+  "parent_header_depth": 3,
+  "configurations": [
+    {"id": "S1", "scale": "small",  "parent_size": 512,  "child_size": 128, "child_overlap": 0, "parent_overlap": 0},
+    {"id": "S2", "scale": "small",  "parent_size": 768,  "child_size": 192, "child_overlap": 0, "parent_overlap": 0},
+    {"id": "M1", "scale": "medium", "parent_size": 1024, "child_size": 256, "child_overlap": 0, "parent_overlap": 0},
+    {"id": "M2", "scale": "medium", "parent_size": 1536, "child_size": 320, "child_overlap": 0, "parent_overlap": 0},
+    {"id": "M3", "scale": "medium", "parent_size": 2048, "child_size": 384, "child_overlap": 0, "parent_overlap": 0},
+    {"id": "L1", "scale": "large",  "parent_size": 2560, "child_size": 512, "child_overlap": 0, "parent_overlap": 0},
+    {"id": "L2", "scale": "large",  "parent_size": 3200, "child_size": 800, "child_overlap": 0, "parent_overlap": 0}
+  ]
+}

@@ -17,6 +17,7 @@ from app.evidence.models import EvidenceCreate
 from app.evidence.repository import evidence_repository
 from app.incidents.models import EvidenceSource
 from app.incidents.repository import incident_repository
+from app.observability.tracing import current_trace_id
 
 
 @dataclass
@@ -42,6 +43,16 @@ def _extract_payload(item: dict[str, Any], task: dict[str, Any] | None) -> dict[
 def _event_data(event: dict[str, Any]) -> dict[str, Any]:
     data = event.get("data")
     return data if isinstance(data, dict) else {}
+
+
+def _audit_metadata(task_id: str, agent_run_id: str = "") -> dict[str, str]:
+    metadata = {"task_id": task_id}
+    if agent_run_id:
+        metadata["agent_run_id"] = agent_run_id
+    trace_id = current_trace_id()
+    if trace_id:
+        metadata["trace_id"] = trace_id
+    return metadata
 
 
 async def run_legacy_langgraph_with_audit(task_id: str, item: dict[str, Any]) -> DiagnosisRunResult:
@@ -107,7 +118,7 @@ async def run_legacy_langgraph_with_audit(task_id: str, item: dict[str, Any]) ->
                 type="alert_payload",
                 summary=str(payload.get("summary") or payload.get("alertname") or "Alert payload"),
                 content=payload,
-                metadata={"task_id": task_id},
+                metadata=_audit_metadata(task_id),
             )
         )
         result.evidence_ids.append(input_evidence_id)
@@ -157,7 +168,7 @@ async def run_legacy_langgraph_with_audit(task_id: str, item: dict[str, Any]) ->
                         type="diagnosis_step",
                         summary=str(data.get("step") or event.get("message") or "diagnosis step"),
                         content={"event": event},
-                        metadata={"task_id": task_id, "agent_run_id": run_id},
+                        metadata=_audit_metadata(task_id, run_id),
                     )
                 )
                 result.evidence_ids.append(evidence_id)
@@ -171,7 +182,7 @@ async def run_legacy_langgraph_with_audit(task_id: str, item: dict[str, Any]) ->
                         type="diagnosis_report",
                         summary="Final diagnosis report",
                         content={"report": result.report, "event": event},
-                        metadata={"task_id": task_id, "agent_run_id": run_id},
+                        metadata=_audit_metadata(task_id, run_id),
                     )
                 )
                 result.evidence_ids.append(report_evidence_id)
@@ -248,7 +259,7 @@ async def _persist_tool_call_event(
             type="tool_call",
             summary=f"{tool_name} -> {status}",
             content=content,
-            metadata={"task_id": task_id, "agent_run_id": run_id},
+            metadata=_audit_metadata(task_id, run_id),
         )
     )
     result.evidence_ids.append(evidence_id)

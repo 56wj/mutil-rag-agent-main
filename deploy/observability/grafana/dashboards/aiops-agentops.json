@@ -1,0 +1,66 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Diagnosis success ratio (1h)",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum(increase(aiops_diagnosis_runs_total{status=\"succeeded\"}[1h])) / clamp_min(sum(increase(aiops_diagnosis_runs_total[1h])), 1)", "legendFormat": "success"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0}
+    },
+    {
+      "id": 2,
+      "title": "Diagnosis P95 latency",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "histogram_quantile(0.95, sum by (le, mode) (rate(aiops_diagnosis_duration_seconds_bucket[10m])))", "legendFormat": "{{mode}}"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 9, "x": 6, "y": 0}
+    },
+    {
+      "id": 3,
+      "title": "Kafka consumer lag",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (priority) (aiops_kafka_consumer_lag)", "legendFormat": "{{priority}}"}],
+      "gridPos": {"h": 8, "w": 9, "x": 15, "y": 0}
+    },
+    {
+      "id": 4,
+      "title": "Tool call rate",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (tool, status) (rate(aiops_agent_tool_calls_total[5m]))", "legendFormat": "{{tool}} / {{status}}"}],
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 8}
+    },
+    {
+      "id": 5,
+      "title": "LLM token rate",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (model, direction) (rate(aiops_llm_tokens_total[5m]))", "legendFormat": "{{model}} / {{direction}}"}],
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 8}
+    },
+    {
+      "id": 6,
+      "title": "Recent platform logs",
+      "type": "logs",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [{"refId": "A", "expr": "{platform=\"multi-agent-aiops\"}", "queryType": "range"}],
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 17}
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 41,
+  "tags": ["aiops", "agentops"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timezone": "browser",
+  "title": "Multi-Agent AIOps / AgentOps",
+  "uid": "multi-agent-aiops-agentops",
+  "version": 1
+}

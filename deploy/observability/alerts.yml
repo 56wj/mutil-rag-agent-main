@@ -1,0 +1,54 @@
+groups:
+  - name: multi-agent-aiops
+    rules:
+      - alert: AIOpsDiagnosisFailureRatioHigh
+        expr: |
+          sum(rate(aiops_diagnosis_runs_total{status="failed"}[10m]))
+          /
+          clamp_min(sum(rate(aiops_diagnosis_runs_total[10m])), 0.001)
+          > 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AIOps 诊断失败率连续 10 分钟超过 10%"
+
+      - alert: AIOpsDiagnosisP95TooSlow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, mode) (rate(aiops_diagnosis_duration_seconds_bucket[10m]))
+          ) > 120
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AIOps 诊断 P95 延迟超过 120 秒"
+
+      - alert: AIOpsKafkaBacklogHigh
+        expr: sum(aiops_kafka_consumer_lag) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "诊断 Kafka backlog 持续堆积"
+
+      - alert: AIOpsDLQNotEmpty
+        expr: max(aiops_kafka_dlq_depth) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "诊断 DLQ 出现失败消息"
+
+      - alert: AIOpsToolFailureRatioHigh
+        expr: |
+          sum(rate(aiops_agent_tool_calls_total{status="failed"}[10m]))
+          /
+          clamp_min(sum(rate(aiops_agent_tool_calls_total[10m])), 0.001)
+          > 0.15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent 工具调用失败率超过 15%"

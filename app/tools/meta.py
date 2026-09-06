@@ -185,6 +185,24 @@ TOOL_META: Dict[str, ToolMeta] = {
         search_hint="prometheus label values 标签 取值 发现",
     ),
 
+    # ===== Loki (loki_tool.py) =====
+    "loki_query_range": ToolMeta(
+        read_only=True,
+        concurrency_safe=True,
+        side_effect="network",
+        max_result_chars=16000,
+        risk_level="low",
+        search_hint="loki logql logs error exception 原始日志 查询",
+    ),
+    "loki_label_values": ToolMeta(
+        read_only=True,
+        concurrency_safe=True,
+        side_effect="network",
+        max_result_chars=4000,
+        risk_level="low",
+        search_hint="loki labels service namespace app 日志标签 发现",
+    ),
+
     # ===== Windows 事件日志 (winlog_server.py) =====
     "query_windows_event": ToolMeta(
         read_only=True,
