@@ -5,6 +5,14 @@
 const API = "/api/v1";
 
 // ---------- Tab 切换 ----------
+const TAB_LABELS = {
+    aiops: "智能诊断",
+    incidents: "事件中心",
+    chat: "RAG 助手",
+    documents: "知识库",
+    wiki: "经验 Wiki",
+};
+
 document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
         document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("tab-active"));
@@ -12,6 +20,8 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
         btn.classList.add("tab-active");
         const tab = btn.dataset.tab;
         document.getElementById(`tab-${tab}`).classList.remove("hidden");
+        const activeLabel = document.getElementById("active-tab-label");
+        if (activeLabel) activeLabel.textContent = TAB_LABELS[tab] || tab;
         if (tab === "documents") {
             loadDocs();
             if (typeof loadEvalReports === "function") loadEvalReports();

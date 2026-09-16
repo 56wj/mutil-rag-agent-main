@@ -13,6 +13,7 @@
 ## 核心能力
 
 - **双诊断模式**：`fast` 使用 Plan-Execute-Replan 快速闭环，`deep` 使用多 Agent 证据图处理复杂 RCA。
+- **Control-room Web UI**：左侧工作区导航、实时健康状态、诊断指标、执行计划、流式日志和工具流水集中在同一响应式控制台。
 - **Skill-first 路由**：先匹配排障 Playbook，再限制可用工具和上下文，降低误调用与无效检索。
 - **混合 RAG**：Parent-Child chunking、Vector + BM25 双路召回、RRF 融合与本地 reranker。
 - **统一工具接入**：系统、网络、Docker、Web Search、Windows 日志等能力通过 MCP 服务暴露。
@@ -23,6 +24,20 @@
 - **并发保护**：支持接口限流、分布式执行槽、Worker 心跳、Kafka rebalance、重试和死信队列。
 - **经验沉淀**：诊断结果可整理为 Markdown Wiki，并在后续诊断中重新召回。
 - **评测与压测**：包含检索评测、RAGAS / OpenEvals 数据集以及队列和接口压测脚本。
+
+## Web 控制台
+
+Web UI 使用原生 HTML / CSS / JavaScript 构建，由 FastAPI 在 `9900` 端口直接提供，
+不需要单独启动前端开发服务器。控制台围绕 OnCall 工作流组织：
+
+- **智能诊断**：在左侧输入故障描述、选择 `fast` / `deep` 与实时 / 排队模式，Skill Router 会展示并高亮匹配的 Playbook。
+- **执行监控**：顶部指标实时展示当前步骤、耗时、工具调用和 Token；右侧同时展示诊断计划、执行步骤、Executor 流式输出和工具流水。
+- **事件中心**：查看 Kafka 任务状态、优先级、证据链、Agent Runs、Tool Calls 与最终报告。
+- **RAG 助手**：支持知识库问答、外网补充检索、MCP 只读工具，以及一键升级为完整诊断事件。
+- **知识与经验**：管理知识库文档、检索评估报告和增量维护的经验 Wiki。
+- **响应式布局**：宽屏显示完整侧栏和双栏诊断台；中等窗口折叠为图标导航；移动端自动切换为单栏工作区。
+
+控制台会每 15 秒检查 API、Agent Mesh 和 MCP 状态；审批入口只在存在待审批工具调用时显示。
 
 ## 系统架构
 
@@ -330,7 +345,7 @@ Markdown / SOP / Alert Corpus
 ├── data/wiki/              # Wiki 约定与运行时目录
 ├── deploy/observability/   # Prometheus/Loki/Tempo/Alloy/Grafana 配置与看板
 ├── docs/                   # SOP、并发测试与压测文档
-├── frontend/               # Web UI
+├── frontend/               # Control-room Web UI（布局、样式与交互）
 ├── mcp_servers/            # MCP 工具服务
 ├── open-webSearch-main/    # 本地 Web Search 服务
 ├── scripts/                # 启动、导入、评测和压测脚本

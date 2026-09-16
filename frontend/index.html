@@ -3,177 +3,184 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#101936">
     <title>Multi-Agent AIOps Platform</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/styles.css?v=20260916-layout3">
 </head>
 <body class="min-h-screen">
 
-<!-- Header -->
-<header class="app-header">
-    <div class="max-w-7xl mx-auto px-6 flex items-center justify-between">
-        <div>
-            <h1 class="app-header__title">Multi-Agent AIOps Platform</h1>
-            <p class="app-header__sub">企业级智能运维诊断 · LangGraph + RAG + MCP</p>
+<div class="control-shell">
+    <aside class="app-sidebar">
+        <div class="sidebar-brand">
+            <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+            <div class="sidebar-brand__copy">
+                <strong>OpsPilot <em>AI</em></strong>
+                <small>INTELLIGENT OPERATIONS</small>
+            </div>
         </div>
-        <div class="flex items-center space-x-4">
-            <!-- 审批 inbox 提示, 后端 approvals API 不可用时自动隐藏 -->
-            <button id="approval-bell" type="button" class="hdr-bell hidden" title="待审批的工具调用">
-                审批 <span id="approval-badge" class="hdr-bell__count hidden"></span>
-            </button>
-            <span id="health-dot" class="status-dot"></span>
-            <span id="health-text" class="text-sm font-mono">检查中...</span>
-        </div>
-    </div>
-</header>
 
-<!-- Tabs -->
-<div class="max-w-7xl mx-auto px-6 mt-6">
-    <div class="tabbar">
-        <nav class="flex">
-            <button data-tab="aiops"     class="tab-btn tab-active">AIOps 诊断</button>
-            <button data-tab="incidents" class="tab-btn">事件中心</button>
-            <button data-tab="chat"      class="tab-btn">RAG 聊天</button>
-            <button data-tab="documents" class="tab-btn">知识库</button>
-            <button data-tab="wiki"      class="tab-btn">经验库</button>
+        <div class="sidebar-label">WORKSPACE</div>
+        <nav class="side-nav" aria-label="主要功能">
+            <button data-tab="aiops" class="tab-btn side-nav__item tab-active" aria-label="智能诊断" title="智能诊断">
+                <span class="side-nav__icon" aria-hidden="true">⌁</span><span>智能诊断</span>
+            </button>
+            <button data-tab="incidents" class="tab-btn side-nav__item" aria-label="事件中心" title="事件中心">
+                <span class="side-nav__icon" aria-hidden="true">▤</span><span>事件中心</span><b class="side-nav__badge">LIVE</b>
+            </button>
+            <button data-tab="chat" class="tab-btn side-nav__item" aria-label="RAG 助手" title="RAG 助手">
+                <span class="side-nav__icon" aria-hidden="true">◌</span><span>RAG 助手</span>
+            </button>
+            <button data-tab="documents" class="tab-btn side-nav__item" aria-label="知识库" title="知识库">
+                <span class="side-nav__icon" aria-hidden="true">▥</span><span>知识库</span>
+            </button>
+            <button data-tab="wiki" class="tab-btn side-nav__item" aria-label="经验 Wiki" title="经验 Wiki">
+                <span class="side-nav__icon" aria-hidden="true">◇</span><span>经验 Wiki</span>
+            </button>
         </nav>
-    </div>
-    <div class="tab-surface">
+
+        <div class="sidebar-status">
+            <div class="sidebar-status__line">
+                <span id="health-dot" class="status-dot"></span>
+                <strong id="health-text">检查中...</strong>
+            </div>
+            <p>API · Agent Mesh · MCP<br>每 15 秒自动检查</p>
+        </div>
+    </aside>
+
+    <main class="app-workspace">
+        <header class="workspace-topbar">
+            <div class="workspace-breadcrumb"><span>工作台</span><i>/</i><strong id="active-tab-label">智能诊断</strong></div>
+            <div class="workspace-actions">
+                <span class="agent-mesh-pill"><i></i> Agent Mesh</span>
+                <button id="approval-bell" type="button" class="hdr-bell hidden" title="待审批的工具调用">
+                    审批 <span id="approval-badge" class="hdr-bell__count hidden"></span>
+                </button>
+                <span class="workspace-avatar">OP</span>
+            </div>
+        </header>
+
+        <div class="workspace-content">
+            <div class="tab-surface">
 
         <!-- ====================== AIOps Tab ====================== -->
         <section id="tab-aiops" class="tab-pane">
-
-            <!-- Skill 总览面板 (诊断中会高亮选中的 Skill) -->
-            <div class="mb-5 border p-4" style="background: var(--surface-alt);">
-                <div class="flex items-center justify-between mb-3">
-                    <h3 class="text-sm font-semibold text-slate-700 flex items-center">
-                        Skill 库 (Playbook)
-                        <span id="skill-count" class="ml-2 text-xs font-normal text-slate-500"></span>
-                    </h3>
-                    <div id="skill-selected-banner" class="hidden text-xs px-3 py-1" style="background: var(--accent); color: var(--accent-text);">
-                        <span class="opacity-80">本次诊断:</span>
-                        <span id="skill-selected-name" class="font-semibold"></span>
-                    </div>
+            <div class="section-heading">
+                <div>
+                    <div class="section-eyebrow">AI OPERATIONS CENTER</div>
+                    <h1>故障诊断工作台</h1>
+                    <p>从告警输入到证据链与处置建议，一屏完成诊断闭环。</p>
                 </div>
-                <div id="skill-list" class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 text-xs">
-                    <span class="text-slate-400 italic col-span-full">加载中...</span>
-                </div>
-                <div id="skill-reason" class="hidden mt-2 text-xs text-slate-600 italic"></div>
+                <div class="section-heading__meta"><span class="live-dot"></span> 实时诊断已就绪</div>
             </div>
 
-            <div class="grid grid-cols-1 xl:grid-cols-3 gap-6 aiops-grid">
-                <!-- 左侧: 输入 + 计划 + 步骤 -->
-                <div class="xl:col-span-1 flex flex-col min-h-0 space-y-3">
-                    <div>
-                        <label class="block text-sm font-semibold mb-2">告警内容 / 故障描述</label>
-                        <textarea id="aiops-query" rows="3"
-                            class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400 text-sm font-mono"
-                            placeholder="例如: 我的电脑内存占用居高不下, 系统开始卡顿...">我的电脑内存占用居高不下, 系统明显卡顿, 浏览器和开发工具响应变慢, 已持续 12 分钟</textarea>
-                    </div>
-                    <div class="flex items-center justify-between gap-3">
-                        <span class="text-xs font-semibold text-slate-600">诊断模式</span>
-                        <div id="aiops-diagnosis-mode" class="flex border border-slate-300 overflow-hidden shrink-0" title="日常走当前 Plan-Execute-Replan; 深度入口预留给后续多 Agent 组诊断">
-                            <button type="button" data-aiops-diagnosis-mode="fast" class="diagnosis-mode-btn">日常</button>
-                            <button type="button" data-aiops-diagnosis-mode="deep" class="diagnosis-mode-btn">深度</button>
-                        </div>
-                    </div>
-                    <div class="flex items-center justify-between gap-3">
-                        <span class="text-xs font-semibold text-slate-600">提交方式</span>
-                        <div id="aiops-submit-mode" class="flex border border-slate-300 overflow-hidden shrink-0" title="实时: 同步流式诊断, 直接看计划/步骤/报告; 排队: 提交到 Kafka 由后台 Worker 执行, 高并发下不阻塞 API, 可看排队位置">
-                            <button type="button" data-aiops-submit-mode="realtime" class="diagnosis-mode-btn">实时</button>
-                            <button type="button" data-aiops-submit-mode="queue" class="diagnosis-mode-btn">排队</button>
-                        </div>
-                    </div>
-                    <div class="flex space-x-2">
-                        <button id="aiops-start" class="flex-1 text-white font-semibold py-2 transition" style="background: var(--accent);">
-                            开始诊断
-                        </button>
-                        <button id="aiops-stop" class="px-4 bg-slate-200 hover:bg-slate-300 text-sm" disabled>
-                            停止
-                        </button>
-                    </div>
-
-                    <div class="shrink-0">
-                        <h3 class="text-sm font-semibold mb-1 text-slate-600">诊断计划</h3>
-                        <div id="aiops-plan" class="bg-slate-50 border p-3 text-sm space-y-1 max-h-[160px] overflow-y-auto">
-                            <span class="text-slate-400 italic">点击"开始诊断"生成计划...</span>
-                        </div>
-                    </div>
-
-                    <div class="flex flex-col min-h-0 flex-1">
-                        <h3 class="text-sm font-semibold mb-1 text-slate-600 shrink-0">执行步骤</h3>
-                        <div id="aiops-steps" class="bg-slate-50 border rounded-lg p-3 text-sm space-y-2 flex-1 min-h-0 overflow-y-auto scroll-smooth">
-                            <span class="text-slate-400 italic">等待开始...</span>
-                        </div>
-                    </div>
+            <div class="runtime-metrics stat-strip cols-4">
+                <div class="stat-cell" data-state="running">
+                    <div class="eyebrow">当前步骤</div>
+                    <div id="mon-step" class="stat-num">—</div>
+                    <div id="mon-step-label" class="stat-sub truncate">等待启动</div>
                 </div>
+                <div class="stat-cell">
+                    <div class="eyebrow">诊断耗时</div>
+                    <div id="mon-elapsed" class="stat-num">0.0s</div>
+                    <div class="stat-sub">自诊断开始</div>
+                </div>
+                <div class="stat-cell" data-state="succeeded">
+                    <div class="eyebrow">工具调用</div>
+                    <div id="mon-tools" class="stat-num">0</div>
+                    <div id="mon-tools-fail" class="stat-sub">失败 0</div>
+                </div>
+                <div class="stat-cell">
+                    <div class="eyebrow"><span>真实 Tokens</span><span id="mon-tokens-badge" class="normal-case font-normal" style="letter-spacing:0">~估算</span></div>
+                    <div id="mon-tokens" class="stat-num">0</div>
+                    <div id="mon-tokens-detail" class="stat-sub truncate" title="">输入 0 · 输出 0</div>
+                </div>
+            </div>
 
-                <!-- 右侧: 实时监控 / 最终报告 -->
-                <div class="col-span-2 flex flex-col min-h-0">
-                    <h3 class="text-sm font-semibold mb-2 text-slate-600 flex items-center justify-between shrink-0">
-                        <span id="aiops-right-title">诊断监控</span>
-                        <span id="aiops-status" class="text-xs font-normal text-slate-400">未开始</span>
-                    </h3>
+            <div class="aiops-console-grid">
+                <section class="ops-card diagnosis-launcher">
+                    <div class="ops-card__head">
+                        <div class="ops-card__title"><span class="ops-card__icon">✦</span>发起诊断</div>
+                        <span class="ops-card__meta">PLAYBOOK ROUTER</span>
+                    </div>
+                    <div class="ops-card__body">
+                        <div class="field-caption"><label for="aiops-query">故障描述</label><span>支持自然语言输入</span></div>
+                        <textarea id="aiops-query" rows="4" class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400 text-sm font-mono" placeholder="例如: 我的电脑内存占用居高不下, 系统开始卡顿...">我的电脑内存占用居高不下, 系统明显卡顿, 浏览器和开发工具响应变慢, 已持续 12 分钟</textarea>
 
-                    <!-- 监控面板: 报告到达前显示; 诊断结束后被 report 替换 -->
-                    <div id="aiops-monitor" class="flex flex-col flex-1 min-h-0 border bg-white p-4 space-y-3 overflow-hidden">
-                        <!-- 指标条 -->
-                        <div class="stat-strip cols-4 shrink-0">
-                            <div class="stat-cell">
-                                <div class="eyebrow">当前步骤</div>
-                                <div id="mon-step" class="stat-num">—</div>
-                                <div id="mon-step-label" class="stat-sub truncate">等待启动</div>
+                        <div class="control-row">
+                            <span>诊断深度</span>
+                            <div id="aiops-diagnosis-mode" class="flex border border-slate-300 overflow-hidden shrink-0" title="日常走当前 Plan-Execute-Replan; 深度入口预留给后续多 Agent 组诊断">
+                                <button type="button" data-aiops-diagnosis-mode="fast" class="diagnosis-mode-btn">日常</button>
+                                <button type="button" data-aiops-diagnosis-mode="deep" class="diagnosis-mode-btn">深度</button>
                             </div>
-                            <div class="stat-cell">
-                                <div class="eyebrow">耗时</div>
-                                <div id="mon-elapsed" class="stat-num">0.0s</div>
-                                <div class="stat-sub">自诊断开始</div>
-                            </div>
-                            <div class="stat-cell">
-                                <div class="eyebrow">工具调用</div>
-                                <div id="mon-tools" class="stat-num">0</div>
-                                <div id="mon-tools-fail" class="stat-sub">失败 0</div>
-                            </div>
-                            <div class="stat-cell">
-                                <div class="eyebrow">
-                                    <span>真实 Tokens</span>
-                                    <span id="mon-tokens-badge" class="normal-case font-normal" style="letter-spacing:0">~估算</span>
-                                </div>
-                                <div id="mon-tokens" class="stat-num">0</div>
-                                <div id="mon-tokens-detail" class="stat-sub truncate" title="">输入 0 · 输出 0</div>
+                        </div>
+                        <div class="control-row">
+                            <span>执行方式</span>
+                            <div id="aiops-submit-mode" class="flex border border-slate-300 overflow-hidden shrink-0" title="实时: 同步流式诊断; 排队: 提交到 Kafka 由后台 Worker 执行">
+                                <button type="button" data-aiops-submit-mode="realtime" class="diagnosis-mode-btn">实时</button>
+                                <button type="button" data-aiops-submit-mode="queue" class="diagnosis-mode-btn">排队</button>
                             </div>
                         </div>
 
-                        <!-- 两栏: 左 实时输出, 右 工具流水 -->
-                        <div class="grid grid-cols-5 gap-3 flex-1 min-h-0">
-                            <div class="col-span-3 flex flex-col min-h-0 border bg-slate-50">
-                                <div class="px-3 py-2 text-xs font-semibold text-slate-600 border-b bg-white shrink-0 flex justify-between">
-                                    <span>Executor 实时输出</span>
-                                    <span id="mon-stream-hint" class="text-slate-400 font-normal">等待中</span>
-                                </div>
-                                <div id="mon-stream" class="flex-1 min-h-0 overflow-y-auto p-3 text-xs text-slate-700 whitespace-pre-wrap break-words font-mono leading-relaxed">
-                                    <span class="text-slate-400 italic">诊断开始后, 模型生成的文本会实时显示在此...</span>
-                                </div>
+                        <div class="skill-overview compact-skills border p-3" style="background: var(--surface-alt);">
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="text-xs font-semibold text-slate-700 flex items-center">推荐 Playbook <span id="skill-count" class="ml-2 text-xs font-normal text-slate-500"></span></h3>
+                                <div id="skill-selected-banner" class="hidden text-[10px] px-2 py-1" style="background: var(--accent); color: var(--accent-text);"><span class="opacity-80">本次:</span> <span id="skill-selected-name" class="font-semibold"></span></div>
                             </div>
-                            <div class="col-span-2 flex flex-col min-h-0 border bg-slate-50">
-                                <div class="px-3 py-2 text-xs font-semibold text-slate-600 border-b bg-white shrink-0">
-                                    工具调用流水
-                                </div>
-                                <div id="mon-tool-feed" class="flex-1 min-h-0 overflow-y-auto p-2 space-y-1 text-xs">
-                                    <span class="text-slate-400 italic px-2">暂无工具调用</span>
-                                </div>
-                            </div>
+                            <div id="skill-list" class="grid grid-cols-2 gap-2 text-xs"><span class="text-slate-400 italic col-span-full">加载中...</span></div>
+                            <div id="skill-reason" class="hidden mt-2 text-xs text-slate-600 italic"></div>
+                        </div>
+
+                        <div class="diagnosis-actions flex gap-2">
+                            <button id="aiops-start" class="primary-action flex-1 text-white font-semibold py-2 transition" style="background: var(--accent);"><span aria-hidden="true">✦</span> 开始智能诊断</button>
+                            <button id="aiops-stop" class="secondary-action px-4 bg-slate-200 hover:bg-slate-300 text-sm" disabled>停止</button>
                         </div>
                     </div>
+                </section>
 
-                    <!-- 报告: 默认隐藏, 诊断结束时显示 -->
-                    <div id="aiops-report" class="prose prose-sm max-w-none border p-5 bg-white flex-1 min-h-0 overflow-y-auto hidden"></div>
-                </div>
+                <section class="ops-card diagnosis-monitor-card">
+                    <div class="ops-card__head">
+                        <div class="ops-card__title"><span class="ops-card__icon">⌁</span><span id="aiops-right-title">执行监控</span></div>
+                        <span id="aiops-status" class="monitor-status">未开始</span>
+                    </div>
+                    <div class="monitor-workspace">
+                        <aside class="execution-rail">
+                            <div class="rail-section">
+                                <div class="rail-title"><span>诊断计划</span><small>PLAN</small></div>
+                                <div id="aiops-plan" class="rail-content space-y-1 overflow-y-auto"><span class="text-slate-400 italic">点击“开始诊断”生成计划...</span></div>
+                            </div>
+                            <div class="rail-section rail-section--grow">
+                                <div class="rail-title"><span>执行步骤</span><small>STEPS</small></div>
+                                <div id="aiops-steps" class="rail-content space-y-2 flex-1 min-h-0 overflow-y-auto scroll-smooth"><span class="text-slate-400 italic">等待开始...</span></div>
+                            </div>
+                        </aside>
+
+                        <div class="monitor-main">
+                            <div id="aiops-monitor" class="flex flex-col flex-1 min-h-0 border bg-white overflow-hidden">
+                                <div class="monitor-stream-grid flex-1 min-h-0">
+                                    <div class="terminal-panel flex flex-col min-h-0">
+                                        <div class="terminal-head"><span><i></i><i></i><i></i> executor.live</span><span id="mon-stream-hint">等待中</span></div>
+                                        <div id="mon-stream" class="flex-1 min-h-0 overflow-y-auto p-4 text-xs whitespace-pre-wrap break-words font-mono leading-relaxed"><span class="text-slate-400 italic">诊断开始后，模型生成的文本会实时显示在此...</span></div>
+                                    </div>
+                                    <div class="tool-feed-panel flex flex-col min-h-0">
+                                        <div class="tool-feed-head">工具调用流水</div>
+                                        <div id="mon-tool-feed" class="flex-1 min-h-0 overflow-y-auto p-2 space-y-1 text-xs"><span class="text-slate-400 italic px-2">暂无工具调用</span></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="aiops-report" class="prose prose-sm max-w-none border p-5 bg-white flex-1 min-h-0 overflow-y-auto hidden"></div>
+                        </div>
+                    </div>
+                </section>
             </div>
         </section>
 
         <!-- ====================== Incidents Tab ====================== -->
         <section id="tab-incidents" class="tab-pane hidden">
+
+            <div class="section-heading section-heading--compact">
+                <div><div class="section-eyebrow">INCIDENT OPERATIONS</div><h1>事件中心</h1><p>集中查看任务状态、证据链、Agent Runs 与诊断报告。</p></div>
+            </div>
 
             <!-- 队列水位条 (后端 /queue/status 不可用时自动隐藏) -->
             <div id="inc-queue-card" class="inc-queue-card hidden mb-3 flex items-center flex-wrap gap-5 text-xs">
@@ -271,6 +278,9 @@
 
         <!-- ====================== Chat Tab ====================== -->
         <section id="tab-chat" class="tab-pane hidden">
+            <div class="section-heading section-heading--compact">
+                <div><div class="section-eyebrow">RAG COPILOT</div><h1>运维知识助手</h1><p>结合知识库、外网检索与 MCP 工具回答运维问题。</p></div>
+            </div>
             <div class="max-w-3xl mx-auto">
                 <div id="chat-messages" class="space-y-4 mb-4 min-h-[400px] max-h-[500px] overflow-y-auto p-3 bg-slate-50 rounded-lg border">
                     <div class="text-center text-slate-400 italic text-sm">基于知识库回答你的运维问题</div>
@@ -291,7 +301,7 @@
                                border-slate-300 text-slate-600 hover:bg-slate-100">
                         MCP <span id="chat-mcp-state">开</span>
                     </button>
-                    <button id="chat-send" class="text-white px-6 font-semibold" style="background: var(--accent);">
+                    <button id="chat-send" class="primary-action text-white px-6 font-semibold" style="background: var(--accent);">
                         发送
                     </button>
                     <button id="chat-escalate" type="button"
@@ -306,6 +316,9 @@
 
         <!-- ====================== Documents Tab ====================== -->
         <section id="tab-documents" class="tab-pane hidden">
+            <div class="section-heading section-heading--compact">
+                <div><div class="section-eyebrow">KNOWLEDGE OPS</div><h1>知识库</h1><p>管理语料、向量索引与检索质量评估报告。</p></div>
+            </div>
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div>
                     <h3 class="text-sm font-semibold mb-2 text-slate-600">上传文档</h3>
@@ -352,6 +365,9 @@
 
         <!-- ====================== Wiki Tab (经验库) ====================== -->
         <section id="tab-wiki" class="tab-pane hidden">
+            <div class="section-heading section-heading--compact">
+                <div><div class="section-eyebrow">INCIDENT MEMORY</div><h1>经验 Wiki</h1><p>沉淀故障模式、服务经验与历史诊断结论。</p></div>
+            </div>
             <div class="mb-3 flex items-center justify-between flex-wrap gap-2">
                 <div>
                     <h3 class="text-sm font-semibold text-slate-700">LLM Wiki · Karpathy 模式</h3>
@@ -391,7 +407,12 @@
             </div>
         </section>
 
-    </div>
+            </div>
+        </div>
+        <footer class="app-footer text-center text-xs text-slate-400 py-4">
+            <span class="footer-dot"></span> OpsPilot AI · Multi-Agent Operations Console · 2026
+        </footer>
+    </main>
 </div>
 
 <!-- ====================== 审批 inbox 浮层 ====================== -->
@@ -409,11 +430,7 @@
     </div>
 </div>
 
-<footer class="text-center text-xs text-slate-400 py-6">
-    Multi-Agent AIOps · LangChain v1.x · 2026
-</footer>
-
 <!-- cache-busting: 改版后前端自动加载最新 JS, 避免浏览器用旧缓存 -->
-<script src="/app.js?v=20260608h"></script>
+<script src="/app.js?v=20260916-layout3"></script>
 </body>
 </html>
