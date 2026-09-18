@@ -1,0 +1,8 @@
+Multi-Agent AIOps deployed.
+
+API:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "aiops.fullname" . }} 9900:{{ .Values.service.port }}
+  curl http://127.0.0.1:9900/api/v1/health
+
+Before production use, provide DATABASE_URL, LLM credentials, KB_ADMIN_TOKEN,
+TLS/Ingress policy, persistent wiki storage, and external Kafka/Redis/Postgres/Milvus.

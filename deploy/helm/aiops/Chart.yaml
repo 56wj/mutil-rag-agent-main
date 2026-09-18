@@ -1,0 +1,7 @@
+apiVersion: v2
+name: aiops
+description: Multi-Agent AIOps API and diagnosis workers
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+kubeVersion: ">=1.25.0-0"

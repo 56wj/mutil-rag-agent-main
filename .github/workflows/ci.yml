@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.22"
+      - name: Install locked dependencies
+        run: uv pip install --system -r requirements.lock
+      - name: Compile Python sources
+        run: python -m compileall -q app mcp_servers scripts
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Import application
+        run: python -c "from app.main import app; print(f' routes={len(app.routes)}')"
+
+  manifests:
+    name: Validate manifests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - name: Lint Helm chart
+        run: helm lint deploy/helm/aiops
+      - name: Render Helm chart
+        run: helm template aiops deploy/helm/aiops --namespace aiops --set secrets.DATABASE_URL='postgresql://user:pass@postgres:5432/aiops' --set secrets.KB_ADMIN_TOKEN='ci-token' > /tmp/aiops-rendered.yaml
+      - name: Validate Compose syntax
+        run: |
+          python - <<'PY'
+          import pathlib
+          import yaml
+
+          data = yaml.safe_load(pathlib.Path("docker-compose.yml").read_text())
+          assert data.get("services"), "docker-compose.yml has no services"
+          assert {"api", "worker-1", "worker-2", "worker-3"} <= set(data["services"])
+          print(f"services={len(data['services'])}")
+          PY

@@ -8,7 +8,7 @@
 # 构建:  docker compose --profile app build
 # 说明:  默认 rag_rerank_provider=dashscope (走 API), 不需要本地 torch;
 #        若启用本地 reranker (FlagEmbedding), 镜像会显著变大, 自行按需取舍。
-FROM python:3.12-slim
+FROM python:3.11-slim
 
 WORKDIR /app
 
@@ -21,8 +21,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --upgrade pip && pip install -r requirements.txt
+COPY requirements.lock .
+RUN pip install --upgrade pip \
+    && pip install --require-hashes -r requirements.lock
 
 COPY . .
 

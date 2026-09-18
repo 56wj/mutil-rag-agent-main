@@ -1,0 +1,97 @@
+image:
+  repository: multi-agent-aiops
+  tag: ""
+  pullPolicy: IfNotPresent
+
+api:
+  replicas: 2
+  workers: 2
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+
+worker:
+  replicas: 3
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+
+service:
+  type: ClusterIP
+  port: 9900
+
+env:
+  APP_NAME: MultiAgentAIOps
+  APP_VERSION: "1.0.0"
+  PORT: "9900"
+  INCIDENT_PIPELINE_ENABLED: "true"
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  REDIS_URL: redis://redis:6379/0
+  MILVUS_HOST: milvus
+  MILVUS_PORT: "19530"
+  OBSERVABILITY_ENABLED: "true"
+  METRICS_ENABLED: "true"
+  OTEL_ENABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  LOG_DIR: /tmp/logs
+
+# Keep credentials in a secret manager or encrypted GitOps values file.
+secrets: {}
+#  DATABASE_URL: postgresql://user:password@postgres:5432/multi_agent_aiops
+#  KB_ADMIN_TOKEN: replace-me
+#  DEEPSEEK_API_KEY: replace-me
+#  DASHSCOPE_API_KEY: replace-me
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+wiki:
+  existingClaim: ""
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: aiops.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+networkPolicy:
+  enabled: false
+  ingressNamespaceSelector: {}

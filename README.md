@@ -140,7 +140,7 @@ cd <repository-directory>
 
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.lock
 
 cp .env.example .env
 ```
@@ -150,6 +150,15 @@ Windows PowerShell 激活虚拟环境：
 ```powershell
 .\.venv\Scripts\Activate.ps1
 Copy-Item .env.example .env
+```
+
+依赖锁定文件 [`requirements.lock`](requirements.lock) 由 `uv pip compile`
+生成，面向 Python 3.11 并包含完整传递依赖和 hashes。修改
+[`requirements.txt`](requirements.txt) 后重新生成：
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv pip compile requirements.txt \
+  --python-version 3.11 --generate-hashes --output-file requirements.lock
 ```
 
 ### 2. 配置环境变量
@@ -226,6 +235,26 @@ Windows：
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\run.ps1
 ```
+
+#### 方式 C：Kubernetes / Helm
+
+Chart 位于 [`deploy/helm/aiops`](deploy/helm/aiops)。它只部署 API 和诊断
+Worker；Kafka、Redis、Postgres、Milvus、LLM、OTel 等依赖由平台服务提供。
+生产环境通过 Secret Manager 或加密 values 文件注入凭据：
+
+```bash
+helm lint deploy/helm/aiops
+helm upgrade --install aiops deploy/helm/aiops \
+  --namespace aiops --create-namespace \
+  --set image.repository=REGISTRY/PROJECT/aiops \
+  --set image.tag=IMAGE_TAG \
+  --set secrets.DATABASE_URL='postgresql://USER:PASSWORD@POSTGRES/DB' \
+  --set secrets.KB_ADMIN_TOKEN='STRONG_TOKEN'
+```
+
+Chart 默认启用 API/Worker 的安全上下文、readiness/liveness/startup 探针、
+滚动更新和 PDB；API HPA、Ingress、NetworkPolicy 与持久化 Wiki 按集群策略
+开启。完整参数见 [`deploy/helm/aiops/values.yaml`](deploy/helm/aiops/values.yaml)。
 
 ### 4. 导入知识库
 
@@ -352,8 +381,15 @@ Markdown / SOP / Alert Corpus
 ├── docker-compose.yml
 ├── Dockerfile
 ├── requirements.txt
+├── requirements.lock       # Python 3.11 可复现依赖锁
+├── deploy/helm/aiops/      # Kubernetes Helm chart
 └── run.ps1
 ```
+
+## CI
+
+`.github/workflows/ci.yml` 在 push / pull request 上执行锁定依赖安装、Python
+编译、单元测试、应用导入、Helm lint/template 和 Compose 结构校验。
 
 ## 配置要点
 
